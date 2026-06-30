@@ -66,7 +66,6 @@ func HandleShutdown(w http.ResponseWriter, r *http.Request) {
 		exec.Command("/bin/systemctl", "poweroff", "--force").Run()
 	}()
 	json.NewEncoder(w).Encode(map[string]string{"status": "shutting down"})
-	json.NewEncoder(w).Encode(map[string]string{"status": "shutting down"})
 }
 
 // HandleScreenOff turns off the display panel via DPMS.
@@ -75,10 +74,12 @@ func HandleScreenOff(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
 	}
+	w.Header().Set("Content-Type", "application/json")
 	if err := osWriteFile("/sys/class/drm/card1-DSI-1/dpms", "Off"); err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"screen": "off"})
+		json.NewEncoder(w).Encode(map[string]string{"screen": "error", "error": err.Error()})
+		return
 	}
+	json.NewEncoder(w).Encode(map[string]string{"screen": "off"})
 }
 
 // HandleScreenOn turns on the display panel via DPMS.
@@ -87,8 +88,10 @@ func HandleScreenOn(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
 	}
+	w.Header().Set("Content-Type", "application/json")
 	if err := osWriteFile("/sys/class/drm/card1-DSI-1/dpms", "On"); err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"screen": "on"})
+		json.NewEncoder(w).Encode(map[string]string{"screen": "error", "error": err.Error()})
+		return
 	}
+	json.NewEncoder(w).Encode(map[string]string{"screen": "on"})
 }

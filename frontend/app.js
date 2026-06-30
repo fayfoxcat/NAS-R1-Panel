@@ -4,7 +4,7 @@
 
   const N = 2;  // overview + detail
   let cur = 0, sx = 0, sy = 0, cx = 0, swiping = false, horiz = false;
-  let timer = null, cb = null;
+  let timer = null, idleTimer = null, cb = null;
   let lastTouch = Date.now();
   let screenOn = true;
   let swipeDir = 0;      // -1 = left, +1 = right
@@ -37,12 +37,16 @@
     wakeScreen();
   }
 
-  setInterval(() => {
-    if (screenOn && (Date.now() - lastTouch) > IDLE_MS) {
-      fetch('/api/screen/off', { method: 'POST' }).catch(() => {});
-      screenOn = false;
-    }
-  }, 5000);
+  function startIdleTimer() {
+    if (idleTimer) clearInterval(idleTimer);
+    idleTimer = setInterval(() => {
+      if (screenOn && (Date.now() - lastTouch) > IDLE_MS) {
+        fetch('/api/screen/off', { method: 'POST' }).catch(() => {});
+        screenOn = false;
+      }
+    }, 5000);
+  }
+  startIdleTimer();
 
   document.addEventListener('touchstart', recordTouch, { passive: true });
 
@@ -313,7 +317,13 @@
   fetchStatus();
   timer = setInterval(fetchStatus, 2000);
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) { clearInterval(timer); timer = null; }
-    else { fetchStatus(); if (!timer) timer = setInterval(fetchStatus, 2000); }
+    if (document.hidden) {
+      clearInterval(timer); timer = null;
+      clearInterval(idleTimer); idleTimer = null;
+    } else {
+      fetchStatus();
+      if (!timer) timer = setInterval(fetchStatus, 2000);
+      if (!idleTimer) startIdleTimer();
+    }
   });
 })();
