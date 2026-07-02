@@ -161,6 +161,9 @@
     return cand[0] || null;
   }
 
+  // ── Render cache (避免重复 innerHTML 导致 WebKit 内存泄露) ──
+  let _lastDisks = '', _lastDocker = '', _lastVMs = '', _lastSvcs = '';
+
   // ── Master Render ─────────────────────────────────────
   function render(d) {
     const upStr = (d.uptime || {}).uptime_str || '--';
@@ -170,7 +173,7 @@
 
     const cpu = d.cpu || {}, mem = d.memory || {};
 
-    // Panel 0 — Overview
+    // Panel 0 — Overview（增量更新，不重建 DOM）
     const cpuPct = Math.round(cpu.percent ?? 0);
     $('#cpu-p').textContent = cpuPct;
     setRing($('#cpu-ring'), cpuPct);
@@ -190,12 +193,31 @@
       $('#ip4').textContent = net.ipv4.join(', ') || '--';
     }
 
-    renderDisks(d.disk_health || []);
+    // 以下模块仅在数据变化时才重建 DOM（避免 innerHTML 导致 WebKit 泄露）
+    renderIfChanged('disks', d.disk_health || [], renderDisks);
+    renderIfChanged('docker', d.docker || [], renderDocker);
+    renderIfChanged('vms', d.vms || [], renderVM);
+    renderIfChanged('svcs', d.services || [], renderSvc);
+  }
 
-    // Panel 1 — Detail
-    renderDocker(d.docker || []);
-    renderVM(d.vms || []);
-    renderSvc(d.services || []);
+  function renderIfChanged(section, data, fn) {
+    var key = JSON.stringify(data);
+    var last;
+    switch (section) {
+      case 'disks': last = _lastDisks; break;
+      case 'docker': last = _lastDocker; break;
+      case 'vms': last = _lastVMs; break;
+      case 'svcs': last = _lastSvcs; break;
+    }
+    if (key !== last) {
+      fn(data);
+      switch (section) {
+        case 'disks': _lastDisks = key; break;
+        case 'docker': _lastDocker = key; break;
+        case 'vms': _lastVMs = key; break;
+        case 'svcs': _lastSvcs = key; break;
+      }
+    }
   }
 
   // ── Disks ─────────────────────────────────────────────
@@ -315,14 +337,14 @@
   // ── Init ──────────────────────────────────────────────
   place(false);
   fetchStatus();
-  timer = setInterval(fetchStatus, 2000);
+  timer = setInterval(fetchStatus, 5000);
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
       clearInterval(timer); timer = null;
       clearInterval(idleTimer); idleTimer = null;
     } else {
       fetchStatus();
-      if (!timer) timer = setInterval(fetchStatus, 2000);
+      if (!timer) timer = setInterval(fetchStatus, 5000);
       if (!idleTimer) startIdleTimer();
     }
   });
