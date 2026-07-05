@@ -539,45 +539,47 @@ fn read_network() -> Vec<NetworkIface> {
     let mut ifaces = Vec::new();
 
     for (name, (rx, tx)) in &curr {
-        let mut ips_v4 = Vec::new();
-        let mut ips_v6 = Vec::new();
-        let mut is_up = false;
+        // Read IPs from /sys/class/net/<name>/ (simplified)
+        let ips_v4 = read_iface_ips(name);
 
-        // Get IPs via netlink (simplified: use /sys)
-        if let Ok(addrs) = nix::ifaddrs::getifaddrs() {
-            for addr in addrs {
-                if addr.interface_name == *name {
-                    is_up = true;
-                    if let Some(sock) = addr.address {
-                        if let nix::sys::socket::SockaddrLike::Inet(inet) =
-                            nix::sys::socket::SockaddrLike::from_raw(
-                                &sock,
-                                None,
-                            )
-                            .unwrap_or(nix::sys::socket::SockaddrStorage::Inet(
-                                unsafe { std::mem::zeroed() },
-                            ))
-                        {
-                            ips_v4.push(inet.ip().to_string());
-                        }
-                    }
-                }
-            }
-        }
+        let is_up = std::path::Path::new(&format!("/sys/class/net/{}/operstate", name))
+            .exists()
+            .then(|| {
+                fs::read_to_string(format!("/sys/class/net/{}/operstate", name))
+                    .map(|s| s.trim() == "up")
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
 
         ifaces.push(NetworkIface {
             name: name.clone(),
             is_up,
             rx_bytes: *rx,
             tx_bytes: *tx,
-            rx_speed: 0.0, // Need previous sample
+            rx_speed: 0.0,
             tx_speed: 0.0,
             ipv4: ips_v4,
-            ipv6: ips_v6,
+            ipv6: Vec::new(),
         });
     }
 
     ifaces
+}
+
+fn read_iface_ips(name: &str) -> Vec<String> {
+    // Read IPs from `ip addr show <name>` or /sys
+    let output = run_cmd("ip", &["-4", "-o", "addr", "show", name]);
+    let mut ips = Vec::new();
+    for line in output.lines() {
+        // Format: <num>: <name> inet <ip>/<prefix> ...
+        if let Some(inet_pos) = line.find("inet ") {
+            let rest = &line[inet_pos + 5..];
+            if let Some(space_pos) = rest.find(|c: char| c.is_whitespace() || c == '/') {
+                ips.push(rest[..space_pos].to_string());
+            }
+        }
+    }
+    ips
 }
 
 fn read_net_dev() -> HashMap<String, (i64, i64)> {

@@ -1,16 +1,13 @@
 // Build script: compiles LVGL 9.x C library and links it.
 //
-// Prerequisites:
-//   git submodule add https://github.com/lvgl/lvgl.git lvgl
-//   cd lvgl && git checkout v9.2.0
-//
 // LVGL is compiled as a static library with:
-//   - Software rendering (we provide a framebuffer via DRM)
-//   - No GPU/OpenGL (renders CPU-side into DRM dumb buffer)
-//   - Linux evdev input
+//   - Software rendering (LV_USE_DRAW_SW=1)
+//   - No GPU (renders CPU-side into DRM dumb buffer)
+//   - Linux pthread + evdev input
 //   - Minimal feature set for this panel
 
 use std::env;
+use std::fs;
 use std::path::PathBuf;
 
 fn main() {
@@ -19,7 +16,7 @@ fn main() {
 
     if !lvgl_src.exists() {
         panic!(
-            "LVGL source not found at {}. Run:\n  git submodule add https://github.com/lvgl/lvgl.git lvgl\n  cd lvgl && git checkout v9.2.0",
+            "LVGL source not found at {}. Run:\n  git submodule add https://github.com/lvgl/lvgl.git lvgl",
             lvgl_dir.display()
         );
     }
@@ -27,93 +24,139 @@ fn main() {
     // Generate lv_conf.h if it doesn't exist
     let conf_path = PathBuf::from("lv_conf.h");
     if !conf_path.exists() {
-        std::fs::write(&conf_path, LV_CONF_H).expect("Failed to write lv_conf.h");
-        println!("cargo:warning=Generated lv_conf.h with default settings");
+        fs::write(&conf_path, LV_CONF_H).expect("Failed to write lv_conf.h");
+        println!("cargo:warning=Generated lv_conf.h");
     }
 
-    // Collect all LVGL C source files
+    // Collect all LVGL C source files (recursive)
+    let mut sources: Vec<PathBuf> = Vec::new();
+    collect_c_files(&lvgl_src, &mut sources);
+
+    // Filter out platform-specific files we don't need
+    let skip_prefixes = [
+        "draw/dma2d/", "draw/espressif/", "draw/eve/", "draw/nanovg/",
+        "draw/nema_gfx/", "draw/nxp/", "draw/renesas/", "draw/vg_lite/",
+        "draw/sdl/", "draw/opengles/",
+        "drivers/display/", "drivers/nuttx/", "drivers/opengles/",
+        "drivers/qnx/", "drivers/sdl/", "drivers/uefi/",
+        "drivers/wayland/", "drivers/windows/", "drivers/x11/",
+        "osal/lv_cmsis_rtos2.c", "osal/lv_freertos.c", "osal/lv_mqx.c",
+        "osal/lv_os_none.c", "osal/lv_rtthread.c", "osal/lv_sdl2.c",
+        "osal/lv_windows.c",
+        "stdlib/builtin/", "stdlib/clib/", "stdlib/micropython/",
+        "stdlib/rtthread/", "stdlib/uefi/",
+        "libs/barcode/", "libs/bin_decoder/", "libs/bmp/", "libs/ffmpeg/",
+        "libs/freetype/", "libs/frogfs/", "libs/fsdrv/", "libs/FT800-FT813/",
+        "libs/gif/", "libs/gltf/", "libs/gstreamer/", "libs/libjpeg_turbo/",
+        "libs/libpng/", "libs/libwebp/", "libs/lodepng/", "libs/lz4/",
+        "libs/nanovg/", "libs/qrcode/", "libs/rle/", "libs/rlottie/",
+        "libs/svg/", "libs/tiny_ttf/", "libs/tjpgd/",
+        "libs/vg_lite_driver/",
+        "debugging/", // skip test/debug files
+    ];
+
+    let skip_files = [
+        "misc/lv_profiler_builtin.c", "misc/lv_profiler_builtin_posix.c",
+        "font/lv_font_dejavu_16_persian_hebrew.c",
+        "font/lv_font_source_han_sans_sc_14_cjk.c",
+        "font/lv_font_source_han_sans_sc_16_cjk.c",
+    ];
+
+    // Font files we need
+    let keep_fonts = ["lv_font.c", "lv_font_montserrat_24.c", "lv_font_fmt_txt.c", "lv_imgfont.c", "lv_binfont_loader.c"];
+    let fonts_needed = ["font/fmt_txt/lv_font_fmt_txt.c", "font/lv_font_montserrat_24.c"];
+
+    let filtered = sources.iter().filter(|p| {
+        let path_str = p.to_string_lossy();
+        let rel = path_str.strip_prefix(&format!("{}/", lvgl_src.display())).unwrap_or(&path_str);
+
+        for prefix in &skip_prefixes {
+            if rel.starts_with(prefix) { return false; }
+        }
+        for file in &skip_files {
+            if rel == *file { return false; }
+        }
+
+        // Skip all font files except the ones we need
+        if rel.starts_with("font/") && !fonts_needed.contains(&rel) {
+            if !keep_fonts.iter().any(|f| rel.ends_with(f)) {
+                return false;
+            }
+        }
+
+        // Skip all libs except those needed
+        if rel.starts_with("libs/") { return false; }
+
+        // Skip non-Linux osal
+        if rel.starts_with("osal/") && rel != "osal/lv_os.c" && rel != "osal/lv_linux.c" && rel != "osal/lv_pthread.c" {
+            return false;
+        }
+
+        // Skip non-pthread stdlib
+        if rel == "stdlib/lv_mem.c" || rel.starts_with("stdlib/builtin/") {
+            return true;
+        }
+        if rel.starts_with("stdlib/") && !rel.starts_with("stdlib/builtin/") && rel != "stdlib/lv_mem.c" {
+            return false;
+        }
+
+        // Skip widget property files (they cause duplicate symbol errors)
+        if rel.starts_with("widgets/property/") { return false; }
+
+        // Keep only the widgets we use
+        if rel.starts_with("widgets/") {
+            let keep_widgets = [
+                "arc/lv_arc.c", "bar/lv_bar.c", "button/lv_button.c",
+                "buttonmatrix/lv_buttonmatrix.c", "label/lv_label.c",
+            ];
+            return keep_widgets.iter().any(|w| rel.ends_with(w));
+        }
+
+        // Skip other large subdirectories
+        if rel.starts_with("others/") && !rel.contains("gridnav") && !rel.contains("fragment") {
+            return false;
+        }
+
+        true
+    });
+
     let mut cc = cc::Build::new();
-    cc.include(&lvgl_dir)
-        .include(".") // for lv_conf.h
+    cc.include(&lvgl_dir)                       // for lvgl.h (root)
+        .include(lvgl_dir.join("include"))      // for lvgl/core/ etc
+        .include(lvgl_dir.join("src"))          // for internal includes
+        .include(".")                            // for lv_conf.h
         .define("LV_CONF_INCLUDE_SIMPLE", "1")
-        .file(lvgl_src.join("core/lv_obj.c"))
-        .file(lvgl_src.join("core/lv_obj_class.c"))
-        .file(lvgl_src.join("core/lv_obj_style.c"))
-        .file(lvgl_src.join("core/lv_obj_pos.c"))
-        .file(lvgl_src.join("core/lv_obj_scroll.c"))
-        .file(lvgl_src.join("core/lv_obj_draw.c"))
-        .file(lvgl_src.join("core/lv_obj_tree.c"))
-        .file(lvgl_src.join("core/lv_obj_event.c"))
-        .file(lvgl_src.join("core/lv_group.c"))
-        .file(lvgl_src.join("core/lv_indev.c"))
-        .file(lvgl_src.join("core/lv_indev_scroll.c"))
-        .file(lvgl_src.join("core/lv_disp.c"))
-        .file(lvgl_src.join("core/lv_refr.c"))
-        .file(lvgl_src.join("core/lv_theme.c"))
-        .file(lvgl_src.join("draw/lv_draw.c"))
-        .file(lvgl_src.join("draw/lv_draw_arc.c"))
-        .file(lvgl_src.join("draw/lv_draw_buf.c"))
-        .file(lvgl_src.join("draw/lv_draw_label.c"))
-        .file(lvgl_src.join("draw/lv_draw_line.c"))
-        .file(lvgl_src.join("draw/lv_draw_mask.c"))
-        .file(lvgl_src.join("draw/lv_draw_rect.c"))
-        .file(lvgl_src.join("draw/lv_draw_triangle.c"))
-        .file(lvgl_src.join("draw/lv_draw_vector.c"))
-        .file(lvgl_src.join("draw/lv_image_decoder.c"))
-        .file(lvgl_src.join("draw/sw/lv_draw_sw.c"))
-        .file(lvgl_src.join("draw/sw/lv_draw_sw_arc.c"))
-        .file(lvgl_src.join("draw/sw/lv_draw_sw_border.c"))
-        .file(lvgl_src.join("draw/sw/lv_draw_sw_box_shadow.c"))
-        .file(lvgl_src.join("draw/sw/lv_draw_sw_fill.c"))
-        .file(lvgl_src.join("draw/sw/lv_draw_sw_gradient.c"))
-        .file(lvgl_src.join("draw/sw/lv_draw_sw_img.c"))
-        .file(lvgl_src.join("draw/sw/lv_draw_sw_letter.c"))
-        .file(lvgl_src.join("draw/sw/lv_draw_sw_line.c"))
-        .file(lvgl_src.join("draw/sw/lv_draw_sw_mask.c"))
-        .file(lvgl_src.join("draw/sw/lv_draw_sw_triangle.c"))
-        .file(lvgl_src.join("draw/sw/lv_draw_sw_vector.c"))
-        .file(lvgl_src.join("font/lv_font.c"))
-        .file(lvgl_src.join("font/lv_font_fmt_txt.c"))
-        .file(lvgl_src.join("font/lv_font_montserrat_24.c"))
-        .file(lvgl_src.join("misc/lv_anim.c"))
-        .file(lvgl_src.join("misc/lv_area.c"))
-        .file(lvgl_src.join("misc/lv_color.c"))
-        .file(lvgl_src.join("misc/lv_color_op.c"))
-        .file(lvgl_src.join("misc/lv_ll.c"))
-        .file(lvgl_src.join("misc/lv_log.c"))
-        .file(lvgl_src.join("misc/lv_math.c"))
-        .file(lvgl_src.join("misc/lv_palette.c"))
-        .file(lvgl_src.join("misc/lv_style.c"))
-        .file(lvgl_src.join("misc/lv_style_gen.c"))
-        .file(lvgl_src.join("misc/lv_templ.c"))
-        .file(lvgl_src.join("misc/lv_timer.c"))
-        .file(lvgl_src.join("misc/lv_text.c"))
-        .file(lvgl_src.join("misc/lv_utils.c"))
-        .file(lvgl_src.join("stdlib/lv_mem.c"))
-        .file(lvgl_src.join("stdlib/lv_string.c"))
-        .file(lvgl_src.join("widgets/arc/lv_arc.c"))
-        .file(lvgl_src.join("widgets/bar/lv_bar.c"))
-        .file(lvgl_src.join("widgets/button/lv_button.c"))
-        .file(lvgl_src.join("widgets/buttonmatrix/lv_buttonmatrix.c"))
-        .file(lvgl_src.join("widgets/label/lv_label.c"))
-        .file(lvgl_src.join("others/gridnav/lv_gridnav.c"))
         .flag_if_supported("-std=c11")
-        .flag_if_supported("-Wall")
-        .flag_if_supported("-O2")
-        .compile("lvgl");
+        .flag_if_supported("-O2");
+
+    for src in filtered {
+        cc.file(&src);
+    }
+
+    cc.compile("lvgl");
 
     // Link system libraries
-    println!("cargo:rustc-link-lib=m"); // math library
+    println!("cargo:rustc-link-lib=m");     // math
+    println!("cargo:rustc-link-lib=pthread"); // pthread
 
     println!("cargo:rerun-if-changed=lv_conf.h");
     println!("cargo:rerun-if-changed=lvgl/");
 }
 
+fn collect_c_files(dir: &PathBuf, out: &mut Vec<PathBuf>) {
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_c_files(&path, out);
+            } else if path.extension().map_or(false, |e| e == "c") {
+                out.push(path);
+            }
+        }
+    }
+}
+
 const LV_CONF_H: &str = r#"
-/**
- * LVGL Configuration for r1-panel (Rust + DRM).
- * Minimal feature set: software rendering to memory buffer.
- */
 #ifndef LV_CONF_H
 #define LV_CONF_H
 
@@ -123,12 +166,9 @@ extern "C" {
 
 /*── Color ───────────────────────────────*/
 #define LV_COLOR_DEPTH 32
-#define LV_COLOR_CHROMA_KEY lv_color_hex(0xFF00FF)
-#define LV_COLOR_SCREEN_TRANSP 0
 
 /*── Memory ──────────────────────────────*/
-#define LV_MEM_SIZE (2 * 1024 * 1024)  /* 2 MB heap */
-#define LV_MEM_CUSTOM 0
+#define LV_MEM_SIZE (2 * 1024 * 1024)
 
 /*── Display buffer ──────────────────────*/
 #define LV_DRAW_BUF_STRIDE_ALIGN 1
@@ -138,21 +178,17 @@ extern "C" {
 #define LV_TICK_CUSTOM 0
 #define LV_USE_TIMER 0
 
-/*── Features ────────────────────────────*/
+/*── Logging ─────────────────────────────*/
 #define LV_USE_LOG 1
 #define LV_LOG_LEVEL LV_LOG_LEVEL_WARN
 #define LV_USE_ASSERT_NULL 0
 #define LV_USE_ASSERT_MALLOC 0
-#define LV_USE_ASSERT_STYLE 0
-#define LV_USE_ASSERT_MEM_INTEGRITY 0
-#define LV_USE_ASSERT_OBJ 0
 
 /*── Drawing ─────────────────────────────*/
 #define LV_DRAW_SW_COMPLEX 1
 #define LV_SHADOW_CACHE_SIZE 0
 #define LV_IMAGE_TRANSFORM_ENABLE 0
 #define LV_CIRCLE_CACHE_SIZE 4
-#define LV_USE_VECTOR_GRAPHIC 0
 
 /*── GPU ─────────────────────────────────*/
 #define LV_USE_DRAW_SW 1
@@ -165,7 +201,8 @@ extern "C" {
 #define LV_USE_ARC 1
 #define LV_USE_BAR 1
 #define LV_USE_BUTTON 1
-#define LV_USE_BUTTONMATRIX 0
+#define LV_USE_BUTTONMATRIX 1
+#define LV_USE_KEYBOARD 0
 #define LV_USE_LABEL 1
 #define LV_USE_IMAGE 0
 #define LV_USE_SLIDER 0
@@ -183,6 +220,14 @@ extern "C" {
 #define LV_USE_TABVIEW 0
 #define LV_USE_TILEVIEW 0
 #define LV_USE_WIN 0
+#define LV_USE_LED 0
+#define LV_USE_SPINNER 0
+#define LV_USE_LIST 0
+#define LV_USE_MENU 0
+#define LV_USE_MSGBOX 0
+#define LV_USE_SPAN 0
+#define LV_USE_SPINBOX 0
+#define LV_USE_CANVAS 0
 
 /*── Layouts ─────────────────────────────*/
 #define LV_USE_FLEX 1
@@ -202,7 +247,7 @@ extern "C" {
 #define LV_THEME_DEFAULT_DARK 1
 #define LV_THEME_DEFAULT_GROW 1
 
-/*── Built-in fonts ──────────────────────*/
+/*── Font ────────────────────────────────*/
 #define LV_FONT_DEFAULT &lv_font_montserrat_24
 
 #ifdef __cplusplus

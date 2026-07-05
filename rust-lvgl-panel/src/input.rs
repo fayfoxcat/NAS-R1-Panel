@@ -5,7 +5,29 @@ use std::fs::{self, File};
 use std::io::Read;
 use std::os::fd::AsRawFd;
 use std::os::unix::io::RawFd;
-use std::path::Path;
+use std::time::Duration;
+
+// Linux input subsystem constants (not in libc crate)
+const EV_SYN: u16 = 0x00;
+const EV_KEY: u16 = 0x01;
+const EV_ABS: u16 = 0x03;
+const ABS_X: u16 = 0x00;
+const ABS_Y: u16 = 0x01;
+const ABS_MT_POSITION_X: u16 = 0x35;
+const ABS_MT_POSITION_Y: u16 = 0x36;
+const BTN_TOUCH: u16 = 0x14a;
+const SYN_REPORT: u16 = 0;
+
+// EVIOCGBIT defined as fn below
+
+#[repr(C)]
+struct input_event {
+    tv_sec: libc::time_t,
+    tv_usec: libc::suseconds_t,
+    type_: u16,
+    code: u16,
+    value: i32,
+}
 
 pub struct TouchInput {
     fd: File,
@@ -17,18 +39,16 @@ pub struct TouchInput {
 impl TouchInput {
     /// Find and open a touch input device.
     pub fn open() -> Option<Self> {
-        // Search /dev/input/event* for touch-capable devices
         if let Ok(entries) = fs::read_dir("/dev/input") {
             for entry in entries.flatten() {
                 let path = entry.path();
                 let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                 if name.starts_with("event") {
                     if let Ok(f) = File::open(&path) {
-                        // Check if this device supports ABS_X and ABS_Y (touchscreen)
                         if has_abs_events(f.as_raw_fd()) {
                             log::info!("Touch device: {}", path.display());
-                            // Re-open in non-blocking mode for poll()
-                            let f = File::open(&path).ok()?;
+                            // Set non-blocking
+                            set_nonblocking(f.as_raw_fd());
                             return Some(TouchInput {
                                 fd: f,
                                 last_x: 0,
@@ -45,8 +65,7 @@ impl TouchInput {
     }
 
     /// Poll for new events and forward to LVGL.
-    /// This is called in the main loop.
-    pub fn poll(&mut self, lvgl: &LvglHandle) {
+    pub fn poll(&mut self, lvgl: &crate::ui::LvglHandle) {
         let mut buf = [0u8; 256];
         match self.fd.read(&mut buf) {
             Ok(n) if n > 0 => {
@@ -89,36 +108,28 @@ enum InputEvent {
 
 fn parse_events(data: &[u8]) -> Vec<InputEvent> {
     let mut events = Vec::new();
-    let ev_size = std::mem::size_of::<libc::input_event>();
+    let ev_size = std::mem::size_of::<input_event>();
 
     for chunk in data.chunks(ev_size) {
         if chunk.len() < ev_size {
             break;
         }
-        let ev: libc::input_event = unsafe { std::ptr::read(chunk.as_ptr() as *const _) };
-        match ev.type_ as u32 {
-            libc::EV_ABS => match ev.code as u32 {
-                libc::ABS_X => events.push(InputEvent::AbsX(ev.value)),
-                libc::ABS_Y => events.push(InputEvent::AbsY(ev.value)),
-                libc::ABS_MT_POSITION_X => events.push(InputEvent::AbsX(ev.value)),
-                libc::ABS_MT_POSITION_Y => events.push(InputEvent::AbsY(ev.value)),
+        let ev: input_event = unsafe { std::ptr::read(chunk.as_ptr() as *const _) };
+        match ev.type_ {
+            EV_ABS => match ev.code {
+                ABS_X | ABS_MT_POSITION_X => events.push(InputEvent::AbsX(ev.value)),
+                ABS_Y | ABS_MT_POSITION_Y => events.push(InputEvent::AbsY(ev.value)),
                 _ => {}
             },
-            libc::EV_KEY => match ev.code as u32 {
-                libc::BTN_TOUCH => {
-                    if ev.value == 1 {
-                        events.push(InputEvent::TouchDown);
-                    } else {
-                        events.push(InputEvent::TouchUp);
-                    }
+            EV_KEY if ev.code == BTN_TOUCH => {
+                if ev.value == 1 {
+                    events.push(InputEvent::TouchDown);
+                } else {
+                    events.push(InputEvent::TouchUp);
                 }
-                _ => {}
-            },
-            libc::EV_SYN => {
-                // SYN_REPORT = end of touch frame; check if touch moved
-                if ev.code as u32 == libc::SYN_REPORT {
-                    events.push(InputEvent::TouchMove);
-                }
+            }
+            EV_SYN if ev.code == SYN_REPORT => {
+                events.push(InputEvent::TouchMove);
             }
             _ => {}
         }
@@ -127,35 +138,30 @@ fn parse_events(data: &[u8]) -> Vec<InputEvent> {
 }
 
 fn has_abs_events(fd: RawFd) -> bool {
-    let mut absbits: [u8; 8] = [0; 8]; // ABS_X = 0x00, ABS_Y = 0x01
-    unsafe {
-        if libc::ioctl(
+    let mut absbits: [u8; 8] = [0; 8];
+    let ret = unsafe {
+        libc::ioctl(
             fd,
-            libc::EVIOCGBIT(libc::EV_ABS as usize, std::mem::size_of::<[u8; 8]>()),
+            EVIOCGBIT(EV_ABS as usize, std::mem::size_of::<[u8; 8]>()),
             &mut absbits,
-        ) >= 0
-        {
-            // Check bit 0 (ABS_X) and bit 1 (ABS_Y)
-            absbits[0] & 0x03 == 0x03
-        } else {
-            false
-        }
+        )
+    };
+    ret >= 0 && absbits[0] & 0x03 == 0x03 // ABS_X + ABS_Y
+}
+
+fn set_nonblocking(fd: RawFd) {
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFL, 0);
+        libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
     }
 }
 
-/// Minimal LVGL interface — will be fleshed out in ui.rs.
-/// This trait-like pattern allows the input module to feed
-/// touch events to LVGL without circular dependencies.
-pub struct LvglHandle;
-
-impl LvglHandle {
-    pub fn send_touch(&self, x: i32, y: i32, pressed: bool) {
-        // Forward to LVGL's indev
-        #[allow(unused_unsafe)]
-        unsafe {
-            // lvgl-sys: lv_indev_set_button_value / lv_indev_set_cursor_pos
-            // Will be implemented once LVGL init is wired up.
-            log::trace!("Touch: ({}, {}) pressed={}", x, y, pressed);
-        }
-    }
+fn EVIOCGBIT(ev: usize, len: usize) -> u64 {
+    // _IOC(_IOC_READ, 'E', 0x20 + ev, len)
+    const IOC_READ: u64 = 0x80000000;
+    let dir = IOC_READ;
+    let ioc_type = b'E' as u64;
+    let nr = 0x20 + ev as u64;
+    let size = len as u64;
+    (dir) | (size << 16) | (ioc_type << 8) | nr
 }
