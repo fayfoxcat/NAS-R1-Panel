@@ -155,7 +155,7 @@ struct drm_mode_crtc {
 const DRM_MODE_CONNECTED: u32 = 1;
 
 unsafe fn drm_ioctl<T>(fd: RawFd, cmd: u64, data: &mut T) -> Result<(), std::io::Error> {
-    let ret = libc::ioctl(fd, cmd as libc::c_ulong, data as *mut T);
+    let ret = libc::ioctl(fd, cmd as i32, data as *mut T);
     if ret < 0 {
         Err(std::io::Error::last_os_error())
     } else {

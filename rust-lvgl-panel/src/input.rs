@@ -142,7 +142,7 @@ fn has_abs_events(fd: RawFd) -> bool {
     let ret = unsafe {
         libc::ioctl(
             fd,
-            EVIOCGBIT(EV_ABS as usize, std::mem::size_of::<[u8; 8]>()),
+            EVIOCGBIT(EV_ABS as usize, std::mem::size_of::<[u8; 8]>()) as i32,
             &mut absbits,
         )
     };
