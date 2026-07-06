@@ -38,7 +38,7 @@ fn main() {
     );
 
     // 3. Open touch input device
-    let touch = input::TouchInput::open().ok();
+    let mut touch = input::TouchInput::open();
     log::info!("Touch: {}", touch.is_some());
 
     // 4. Build UI panels
@@ -62,7 +62,7 @@ fn main() {
         lvgl.task_handler();
 
         // Process touch events
-        if let Some(ref t) = touch {
+        if let Some(ref mut t) = touch {
             t.poll(&lvgl);
         }
 

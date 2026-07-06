@@ -399,7 +399,7 @@ fn read_disk_health() -> Vec<DiskHealth> {
             power_on_hours: None,
             percent_used: None,
             disk_type: disk_type.clone(),
-            role,
+            role: role.to_string(),
             mounts,
         };
 

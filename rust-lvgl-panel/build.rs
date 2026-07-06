@@ -6,7 +6,6 @@
 //   - Linux pthread + evdev input
 //   - Minimal feature set for this panel
 
-use std::env;
 use std::fs;
 use std::path::PathBuf;
 
@@ -43,9 +42,9 @@ fn main() {
         "osal/lv_cmsis_rtos2.c", "osal/lv_freertos.c", "osal/lv_mqx.c",
         "osal/lv_os_none.c", "osal/lv_rtthread.c", "osal/lv_sdl2.c",
         "osal/lv_windows.c",
-        "stdlib/builtin/", "stdlib/clib/", "stdlib/micropython/",
+        "stdlib/clib/", "stdlib/micropython/",
         "stdlib/rtthread/", "stdlib/uefi/",
-        "libs/barcode/", "libs/bin_decoder/", "libs/bmp/", "libs/ffmpeg/",
+        "libs/barcode/", "libs/bmp/", "libs/ffmpeg/",
         "libs/freetype/", "libs/frogfs/", "libs/fsdrv/", "libs/FT800-FT813/",
         "libs/gif/", "libs/gltf/", "libs/gstreamer/", "libs/libjpeg_turbo/",
         "libs/libpng/", "libs/libwebp/", "libs/lodepng/", "libs/lz4/",
@@ -84,19 +83,22 @@ fn main() {
             }
         }
 
-        // Skip all libs except those needed
-        if rel.starts_with("libs/") { return false; }
+        // Skip all libs except required ones (bin_decoder for lv_init)
+        if rel.starts_with("libs/") {
+            return rel == "libs/bin_decoder/lv_bin_decoder.c";
+        }
 
         // Skip non-Linux osal
         if rel.starts_with("osal/") && rel != "osal/lv_os.c" && rel != "osal/lv_linux.c" && rel != "osal/lv_pthread.c" {
             return false;
         }
 
-        // Skip non-pthread stdlib
-        if rel == "stdlib/lv_mem.c" || rel.starts_with("stdlib/builtin/") {
+        // Keep stdlib dispatch files + builtin implementations
+        let keep_stdlib = ["stdlib/lv_mem.c", "stdlib/lv_string.c", "stdlib/lv_sprintf.c"];
+        if keep_stdlib.iter().any(|f| rel.ends_with(f)) || rel.starts_with("stdlib/builtin/") {
             return true;
         }
-        if rel.starts_with("stdlib/") && !rel.starts_with("stdlib/builtin/") && rel != "stdlib/lv_mem.c" {
+        if rel.starts_with("stdlib/") {
             return false;
         }
 
@@ -132,6 +134,9 @@ fn main() {
     for src in filtered {
         cc.file(&src);
     }
+
+    // Add wrapper that exposes static-inline LVGL functions
+    cc.file("lvgl_wrapper.c");
 
     cc.compile("lvgl");
 

@@ -9,12 +9,11 @@ use std::ptr;
 // DRM IOCTL constants
 const DRM_IOCTL_BASE: u8 = b'd';
 const DRM_IOC_READWRITE: u32 = 0xC0000000;
-const DRM_IOC_SIZEOF: fn(u32) -> u32 = |n| n;
-
 macro_rules! DRM_IOWR {
-    ($nr:expr, $ty:ty) => {
-        (DRM_IOC_READWRITE) | ((std::mem::size_of::<$ty>() as u32) << 16) | ((DRM_IOCTL_BASE as u32) << 8) | ($nr)
-    };
+    ($nr:expr, $ty:ty) => {{
+        let sz = std::mem::size_of::<$ty>() as u64;
+        (DRM_IOC_READWRITE as u64) | (sz << 16) | ((DRM_IOCTL_BASE as u64) << 8) | ($nr as u64)
+    }};
 }
 
 const DRM_IOCTL_SET_MASTER: u64 = DRM_IOWR!(0x1e, drm_set_master);
@@ -29,9 +28,11 @@ const DRM_IOCTL_MODE_SETCRTC: u64 = DRM_IOWR!(0xa2, drm_mode_crtc);
 
 // DRM structs (x86_64 Linux ABI)
 #[repr(C)]
+#[derive(Clone, Copy)]
 struct drm_set_master { __pad: u64 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 struct drm_mode_card_res {
     fb_id_ptr: u64,
     crtc_id_ptr: u64,
@@ -48,6 +49,7 @@ struct drm_mode_card_res {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 struct drm_mode_get_connector {
     encoders_ptr: u64,
     modes_ptr: u64,
@@ -68,6 +70,7 @@ struct drm_mode_get_connector {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 struct drm_mode_get_encoder {
     encoder_id: u32,
     encoder_type: u32,
@@ -77,6 +80,7 @@ struct drm_mode_get_encoder {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 struct drm_mode_create_dumb {
     height: u32,
     width: u32,
@@ -88,6 +92,7 @@ struct drm_mode_create_dumb {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 struct drm_mode_map_dumb {
     handle: u32,
     pad: u32,
@@ -95,11 +100,13 @@ struct drm_mode_map_dumb {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 struct drm_mode_destroy_dumb {
     handle: u32,
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 struct drm_mode_fb_cmd {
     fb_id: u32,
     width: u32,
@@ -111,6 +118,7 @@ struct drm_mode_fb_cmd {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 struct drm_mode_modeinfo {
     clock: u32,
     hdisplay: u16,
@@ -125,11 +133,12 @@ struct drm_mode_modeinfo {
     vscan: u16,
     vrefresh: u32,
     flags: u32,
-    type: u32,
+    r#type: u32,
     name: [i8; 32],
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 struct drm_mode_crtc {
     set_connectors_ptr: u64,
     count_connectors: u32,
@@ -295,7 +304,7 @@ unsafe fn read_u32s(_fd: RawFd, ptr: u64, count: usize) -> Vec<u32> {
 
 unsafe fn find_connected(fd: RawFd, connectors: &[u32]) -> Result<(u32, String, drm_mode_modeinfo), String> {
     for &conn_id in connectors {
-        let mut modes_buf = [drm_mode_modeinfo { clock: 0, hdisplay: 0, hsync_start: 0, hsync_end: 0, htotal: 0, hskew: 0, vdisplay: 0, vsync_start: 0, vsync_end: 0, vtotal: 0, vscan: 0, vrefresh: 0, flags: 0, type_: 0, name: [0; 32] }; 32];
+        let mut modes_buf = [drm_mode_modeinfo { clock: 0, hdisplay: 0, hsync_start: 0, hsync_end: 0, htotal: 0, hskew: 0, vdisplay: 0, vsync_start: 0, vsync_end: 0, vtotal: 0, vscan: 0, vrefresh: 0, flags: 0, r#type: 0, name: [0; 32] }; 32];
 
         let mut gc: drm_mode_get_connector = std::mem::zeroed();
         gc.connector_id = conn_id;
@@ -325,7 +334,7 @@ unsafe fn find_crtc_for_conn(fd: RawFd, conn_id: u32, crtcs: &[u32]) -> Result<u
     // Try encoder -> crtc
     let mut gc: drm_mode_get_connector = std::mem::zeroed();
     gc.connector_id = conn_id;
-    gc.modes_ptr = ptr::null_mut() as u64;
+    gc.modes_ptr = 0u64;
     drm_ioctl(fd, DRM_IOCTL_MODE_GETCONNECTOR, &mut gc)
         .map_err(|e| format!("get_conn2: {:?}", e))?;
 

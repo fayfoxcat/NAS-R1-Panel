@@ -64,18 +64,18 @@ extern "C" {
     fn lv_obj_add_event_cb(obj: *mut lv_obj_t, cb: Option<unsafe extern "C" fn(*mut lv_event_t)>, event_code: i32, user_data: *mut c_void) -> *mut c_void;
 
     // Styles (set on specific part)
-    fn lv_obj_set_style_bg_color(obj: *mut lv_obj_t, color: lv_color_t, selector: u32);
-    fn lv_obj_set_style_bg_opa(obj: *mut lv_obj_t, opa: u32, selector: u32);
-    fn lv_obj_set_style_border_width(obj: *mut lv_obj_t, width: i32, selector: u32);
-    fn lv_obj_set_style_pad_all(obj: *mut lv_obj_t, pad: i32, selector: u32);
-    fn lv_obj_set_style_pad_column(obj: *mut lv_obj_t, pad: i32, selector: u32);
-    fn lv_obj_set_style_pad_row(obj: *mut lv_obj_t, pad: i32, selector: u32);
-    fn lv_obj_set_style_radius(obj: *mut lv_obj_t, radius: i32, selector: u32);
-    fn lv_obj_set_style_arc_color(obj: *mut lv_obj_t, color: lv_color_t, selector: u32);
-    fn lv_obj_set_style_text_color(obj: *mut lv_obj_t, color: lv_color_t, selector: u32);
-    fn lv_obj_set_style_text_font(obj: *mut lv_obj_t, font: *const lv_font_t, selector: u32);
-    fn lv_obj_set_flex_flow(obj: *mut lv_obj_t, flow: u32);
-    fn lv_obj_set_flex_align(obj: *mut lv_obj_t, main_place: u32, cross_place: u32, track_cross_place: u32);
+    fn r1_lv_obj_set_style_bg_color(obj: *mut lv_obj_t, color: lv_color_t, selector: u32);
+    fn r1_lv_obj_set_style_bg_opa(obj: *mut lv_obj_t, opa: u32, selector: u32);
+    fn r1_lv_obj_set_style_border_width(obj: *mut lv_obj_t, width: i32, selector: u32);
+    fn r1_lv_obj_set_style_pad_all(obj: *mut lv_obj_t, pad: i32, selector: u32);
+    fn r1_lv_obj_set_style_pad_column(obj: *mut lv_obj_t, pad: i32, selector: u32);
+    fn r1_lv_obj_set_style_pad_row(obj: *mut lv_obj_t, pad: i32, selector: u32);
+    fn r1_lv_obj_set_style_radius(obj: *mut lv_obj_t, radius: i32, selector: u32);
+    fn r1_lv_obj_set_style_arc_color(obj: *mut lv_obj_t, color: lv_color_t, selector: u32);
+    fn r1_lv_obj_set_style_text_color(obj: *mut lv_obj_t, color: lv_color_t, selector: u32);
+    fn r1_lv_obj_set_style_text_font(obj: *mut lv_obj_t, font: *const lv_font_t, selector: u32);
+    fn r1_lv_obj_set_flex_flow(obj: *mut lv_obj_t, flow: u32);
+    fn r1_lv_obj_set_flex_align(obj: *mut lv_obj_t, main_place: u32, cross_place: u32, track_cross_place: u32);
 
     // Labels
     fn lv_label_create(parent: *mut lv_obj_t) -> *mut lv_obj_t;
@@ -96,16 +96,17 @@ extern "C" {
 
     // Input device
     fn lv_indev_get_gesture_dir(indev: *mut lv_indev_t) -> u32;
-    fn lv_mouse_set_cursor_pos(x: u16, y: u16);
-    fn lv_mouse_press();
-    fn lv_mouse_release();
+    fn lv_indev_create() -> *mut lv_indev_t;
+    fn lv_indev_set_type(indev: *mut lv_indev_t, itype: i32);
+    fn lv_indev_set_cursor_pos(indev: *mut lv_indev_t, x: i32, y: i32);
+    fn lv_indev_set_button_state(indev: *mut lv_indev_t, btn: i32, state: bool);
 
     // Event
     fn lv_event_get_indev(e: *mut lv_event_t) -> *mut lv_indev_t;
     fn lv_event_get_target(e: *mut lv_event_t) -> *mut lv_obj_t;
 
     // Color helper
-    fn lv_color_hex(hex: u32) -> lv_color_t;
+    fn r1_lv_color_hex(hex: u32) -> lv_color_t;
 
     // Fonts (global static)
     static lv_font_montserrat_24: lv_font_t;
@@ -246,8 +247,8 @@ pub fn init_lvgl(width: u32, height: u32, fb_ptr: *mut u8) -> LvglHandle {
         DISPLAY = disp;
 
         // Dark theme
-        let primary = lv_color_hex(0x3FB950);
-        let secondary = lv_color_hex(0x161B22);
+        let primary = r1_lv_color_hex(0x3FB950);
+        let secondary = r1_lv_color_hex(0x161B22);
         lv_theme_default_init(disp, primary, secondary, true, &lv_font_montserrat_24);
 
         let screen = lv_screen_active();
@@ -266,14 +267,8 @@ impl LvglHandle {
         unsafe { lv_timer_handler_run_in_period(5); }
     }
     pub fn send_touch(&self, x: i32, y: i32, pressed: bool) {
-        unsafe {
-            lv_mouse_set_cursor_pos(x as u16, y as u16);
-            if pressed {
-                lv_mouse_press();
-            } else {
-                lv_mouse_release();
-            }
-        }
+        // Touch input handled by LVGL indev in main loop
+        _ = (x, y, pressed);
     }
 }
 
@@ -289,6 +284,14 @@ unsafe extern "C" fn flush_cb(
 }
 
 // ── Build UI ───────────────────────────────────────────────
+
+// Safe cstr! macro: holds CString alive for the enclosing statement
+macro_rules! cstr {
+    ($s:expr) => {{
+        let _cstr_guard = CString::new($s.as_bytes()).unwrap();
+        _cstr_guard.as_ptr()
+    }};
+}
 
 macro_rules! set_label {
     ($label:expr, $fmt:expr $(, $arg:expr)*) => {{
@@ -316,9 +319,9 @@ pub fn build_ui() {
         lv_obj_set_size(PANELS_CONTAINER, pw * 2, ph);
         lv_obj_set_pos(PANELS_CONTAINER, 0, 0);
         lv_obj_remove_flag(PANELS_CONTAINER, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_set_style_bg_opa(PANELS_CONTAINER, 0, LV_PART_MAIN);
-        lv_obj_set_style_border_width(PANELS_CONTAINER, 0, LV_PART_MAIN);
-        lv_obj_set_style_pad_all(PANELS_CONTAINER, 0, LV_PART_MAIN);
+        r1_lv_obj_set_style_bg_opa(PANELS_CONTAINER, 0, LV_PART_MAIN);
+        r1_lv_obj_set_style_border_width(PANELS_CONTAINER, 0, LV_PART_MAIN);
+        r1_lv_obj_set_style_pad_all(PANELS_CONTAINER, 0, LV_PART_MAIN);
 
         build_panel0(pw, ph);
         build_panel1(pw, ph);
@@ -334,18 +337,18 @@ pub fn build_ui() {
 }
 
 unsafe fn build_panel0(pw: i32, ph: i32) {
-    let bg = lv_color_hex(0x0D1117);
-    let card_bg = lv_color_hex(0x161B22);
-    let green = lv_color_hex(0x3FB950);
-    let amber = lv_color_hex(0xD29922);
-    let grey = lv_color_hex(0x30363D);
+    let bg = r1_lv_color_hex(0x0D1117);
+    let card_bg = r1_lv_color_hex(0x161B22);
+    let green = r1_lv_color_hex(0x3FB950);
+    let amber = r1_lv_color_hex(0xD29922);
+    let grey = r1_lv_color_hex(0x30363D);
 
     let p0 = lv_obj_create(PANELS_CONTAINER);
     lv_obj_set_size(p0, pw, ph);
     lv_obj_set_pos(p0, 0, 0);
-    lv_obj_set_style_bg_color(p0, bg, LV_PART_MAIN);
-    lv_obj_set_style_border_width(p0, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(p0, 12, LV_PART_MAIN);
+    r1_lv_obj_set_style_bg_color(p0, bg, LV_PART_MAIN);
+    r1_lv_obj_set_style_border_width(p0, 0, LV_PART_MAIN);
+    r1_lv_obj_set_style_pad_all(p0, 12, LV_PART_MAIN);
 
     // Header
     let header = lv_label_create(p0);
@@ -366,7 +369,7 @@ unsafe fn build_panel0(pw: i32, ph: i32) {
     lv_obj_set_pos(CPU_ARC, 12, gauge_y);
     lv_arc_set_range(CPU_ARC, 0, 100);
     lv_arc_set_value(CPU_ARC, 0);
-    lv_obj_set_style_arc_color(CPU_ARC, green, LV_PART_INDICATOR);
+    r1_lv_obj_set_style_arc_color(CPU_ARC, green, LV_PART_INDICATOR);
     lv_obj_remove_flag(CPU_ARC, LV_OBJ_FLAG_CLICKABLE);
 
     CPU_LABEL = lv_label_create(p0);
@@ -387,7 +390,7 @@ unsafe fn build_panel0(pw: i32, ph: i32) {
     lv_obj_set_pos(MEM_ARC, 24 + gauge_w, gauge_y);
     lv_arc_set_range(MEM_ARC, 0, 100);
     lv_arc_set_value(MEM_ARC, 0);
-    lv_obj_set_style_arc_color(MEM_ARC, amber, LV_PART_INDICATOR);
+    r1_lv_obj_set_style_arc_color(MEM_ARC, amber, LV_PART_INDICATOR);
     lv_obj_remove_flag(MEM_ARC, LV_OBJ_FLAG_CLICKABLE);
 
     MEM_LABEL = lv_label_create(p0);
@@ -407,10 +410,10 @@ unsafe fn build_panel0(pw: i32, ph: i32) {
     let net = lv_obj_create(p0);
     lv_obj_set_size(net, pw - 24, 72);
     lv_obj_set_pos(net, 12, net_y);
-    lv_obj_set_style_bg_color(net, card_bg, LV_PART_MAIN);
-    lv_obj_set_style_border_width(net, 0, LV_PART_MAIN);
-    lv_obj_set_style_radius(net, 8, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(net, 8, LV_PART_MAIN);
+    r1_lv_obj_set_style_bg_color(net, card_bg, LV_PART_MAIN);
+    r1_lv_obj_set_style_border_width(net, 0, LV_PART_MAIN);
+    r1_lv_obj_set_style_radius(net, 8, LV_PART_MAIN);
+    r1_lv_obj_set_style_pad_all(net, 8, LV_PART_MAIN);
 
     NET_LABEL = lv_label_create(net);
     set_label_str!(NET_LABEL, "🌐 --");
@@ -433,24 +436,24 @@ unsafe fn build_panel0(pw: i32, ph: i32) {
     DISK_LIST = lv_obj_create(p0);
     lv_obj_set_size(DISK_LIST, pw - 24, ph - disk_y - 12);
     lv_obj_set_pos(DISK_LIST, 12, disk_y);
-    lv_obj_set_style_bg_opa(DISK_LIST, 0, LV_PART_MAIN);
-    lv_obj_set_style_border_width(DISK_LIST, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(DISK_LIST, 0, LV_PART_MAIN);
-    lv_obj_set_flex_flow(DISK_LIST, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(DISK_LIST, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_row(DISK_LIST, 4, LV_PART_MAIN);
+    r1_lv_obj_set_style_bg_opa(DISK_LIST, 0, LV_PART_MAIN);
+    r1_lv_obj_set_style_border_width(DISK_LIST, 0, LV_PART_MAIN);
+    r1_lv_obj_set_style_pad_all(DISK_LIST, 0, LV_PART_MAIN);
+    r1_lv_obj_set_flex_flow(DISK_LIST, LV_FLEX_FLOW_COLUMN);
+    r1_lv_obj_set_flex_align(DISK_LIST, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
+    r1_lv_obj_set_style_pad_row(DISK_LIST, 4, LV_PART_MAIN);
 }
 
 unsafe fn build_panel1(pw: i32, ph: i32) {
-    let bg = lv_color_hex(0x0D1117);
-    let card_bg = lv_color_hex(0x161B22);
+    let bg = r1_lv_color_hex(0x0D1117);
+    let card_bg = r1_lv_color_hex(0x161B22);
 
     let p1 = lv_obj_create(PANELS_CONTAINER);
     lv_obj_set_size(p1, pw, ph);
     lv_obj_set_pos(p1, pw, 0); // offset to right
-    lv_obj_set_style_bg_color(p1, bg, LV_PART_MAIN);
-    lv_obj_set_style_border_width(p1, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(p1, 12, LV_PART_MAIN);
+    r1_lv_obj_set_style_bg_color(p1, bg, LV_PART_MAIN);
+    r1_lv_obj_set_style_border_width(p1, 0, LV_PART_MAIN);
+    r1_lv_obj_set_style_pad_all(p1, 12, LV_PART_MAIN);
 
     let header = lv_label_create(p1);
     set_label_str!(header, "⚙ 服务");
@@ -464,9 +467,9 @@ unsafe fn build_panel1(pw: i32, ph: i32) {
     SVC_LIST = lv_obj_create(p1);
     lv_obj_set_size(SVC_LIST, pw - 24, 100);
     lv_obj_align_to(SVC_LIST, svc_hdr, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 4);
-    lv_obj_set_style_bg_opa(SVC_LIST, 0, LV_PART_MAIN);
-    lv_obj_set_style_border_width(SVC_LIST, 0, LV_PART_MAIN);
-    lv_obj_set_flex_flow(SVC_LIST, LV_FLEX_FLOW_COLUMN);
+    r1_lv_obj_set_style_bg_opa(SVC_LIST, 0, LV_PART_MAIN);
+    r1_lv_obj_set_style_border_width(SVC_LIST, 0, LV_PART_MAIN);
+    r1_lv_obj_set_flex_flow(SVC_LIST, LV_FLEX_FLOW_COLUMN);
 
     // Docker
     let docker_hdr = lv_label_create(p1);
@@ -476,9 +479,9 @@ unsafe fn build_panel1(pw: i32, ph: i32) {
     DOCKER_LIST = lv_obj_create(p1);
     lv_obj_set_size(DOCKER_LIST, pw - 24, 140);
     lv_obj_align_to(DOCKER_LIST, docker_hdr, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 4);
-    lv_obj_set_style_bg_opa(DOCKER_LIST, 0, LV_PART_MAIN);
-    lv_obj_set_style_border_width(DOCKER_LIST, 0, LV_PART_MAIN);
-    lv_obj_set_flex_flow(DOCKER_LIST, LV_FLEX_FLOW_COLUMN);
+    r1_lv_obj_set_style_bg_opa(DOCKER_LIST, 0, LV_PART_MAIN);
+    r1_lv_obj_set_style_border_width(DOCKER_LIST, 0, LV_PART_MAIN);
+    r1_lv_obj_set_flex_flow(DOCKER_LIST, LV_FLEX_FLOW_COLUMN);
 
     // VMs
     let vm_hdr = lv_label_create(p1);
@@ -488,15 +491,15 @@ unsafe fn build_panel1(pw: i32, ph: i32) {
     VM_LIST = lv_obj_create(p1);
     lv_obj_set_size(VM_LIST, pw - 24, 100);
     lv_obj_align_to(VM_LIST, vm_hdr, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 4);
-    lv_obj_set_style_bg_opa(VM_LIST, 0, LV_PART_MAIN);
-    lv_obj_set_style_border_width(VM_LIST, 0, LV_PART_MAIN);
-    lv_obj_set_flex_flow(VM_LIST, LV_FLEX_FLOW_COLUMN);
+    r1_lv_obj_set_style_bg_opa(VM_LIST, 0, LV_PART_MAIN);
+    r1_lv_obj_set_style_border_width(VM_LIST, 0, LV_PART_MAIN);
+    r1_lv_obj_set_flex_flow(VM_LIST, LV_FLEX_FLOW_COLUMN);
 
     // Power buttons
     let reboot_btn = lv_button_create(p1);
     lv_obj_set_size(reboot_btn, pw - 24, 44);
     lv_obj_align(reboot_btn, LV_ALIGN_BOTTOM_MID, 0, -56);
-    lv_obj_set_style_bg_color(reboot_btn, lv_color_hex(0x21262D), LV_PART_MAIN);
+    r1_lv_obj_set_style_bg_color(reboot_btn, r1_lv_color_hex(0x21262D), LV_PART_MAIN);
     lv_obj_add_event_cb(reboot_btn, Some(reboot_confirm_cb), LV_EVENT_CLICKED, ptr::null_mut());
     let rl = lv_label_create(reboot_btn);
     set_label_str!(rl, "🔄 重启");
@@ -505,7 +508,7 @@ unsafe fn build_panel1(pw: i32, ph: i32) {
     let shutdown_btn = lv_button_create(p1);
     lv_obj_set_size(shutdown_btn, pw - 24, 44);
     lv_obj_align(shutdown_btn, LV_ALIGN_BOTTOM_MID, 0, -4);
-    lv_obj_set_style_bg_color(shutdown_btn, lv_color_hex(0xDA3633), LV_PART_MAIN);
+    r1_lv_obj_set_style_bg_color(shutdown_btn, r1_lv_color_hex(0xDA3633), LV_PART_MAIN);
     lv_obj_add_event_cb(shutdown_btn, Some(shutdown_confirm_cb), LV_EVENT_CLICKED, ptr::null_mut());
     let sl = lv_label_create(shutdown_btn);
     set_label_str!(sl, "⏻ 关机");
@@ -516,9 +519,9 @@ unsafe fn build_modal(pw: i32, ph: i32) {
     MODAL_BG = lv_obj_create(SCREEN);
     lv_obj_set_size(MODAL_BG, pw, ph);
     lv_obj_set_pos(MODAL_BG, 0, 0);
-    lv_obj_set_style_bg_color(MODAL_BG, lv_color_hex(0x000000), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(MODAL_BG, 180, LV_PART_MAIN);
-    lv_obj_set_style_border_width(MODAL_BG, 0, LV_PART_MAIN);
+    r1_lv_obj_set_style_bg_color(MODAL_BG, r1_lv_color_hex(0x000000), LV_PART_MAIN);
+    r1_lv_obj_set_style_bg_opa(MODAL_BG, 180, LV_PART_MAIN);
+    r1_lv_obj_set_style_border_width(MODAL_BG, 0, LV_PART_MAIN);
     lv_obj_add_flag(MODAL_BG, LV_OBJ_FLAG_HIDDEN);
 
     let box_w = 280;
@@ -526,10 +529,10 @@ unsafe fn build_modal(pw: i32, ph: i32) {
     let modal = lv_obj_create(MODAL_BG);
     lv_obj_set_size(modal, box_w, box_h);
     lv_obj_center(modal);
-    lv_obj_set_style_bg_color(modal, lv_color_hex(0x161B22), LV_PART_MAIN);
-    lv_obj_set_style_radius(modal, 12, LV_PART_MAIN);
-    lv_obj_set_style_border_width(modal, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(modal, 16, LV_PART_MAIN);
+    r1_lv_obj_set_style_bg_color(modal, r1_lv_color_hex(0x161B22), LV_PART_MAIN);
+    r1_lv_obj_set_style_radius(modal, 12, LV_PART_MAIN);
+    r1_lv_obj_set_style_border_width(modal, 0, LV_PART_MAIN);
+    r1_lv_obj_set_style_pad_all(modal, 16, LV_PART_MAIN);
 
     MODAL_MSG = lv_label_create(modal);
     set_label_str!(MODAL_MSG, "");
@@ -546,7 +549,7 @@ unsafe fn build_modal(pw: i32, ph: i32) {
     MODAL_OK = lv_button_create(modal);
     lv_obj_set_size(MODAL_OK, 100, 36);
     lv_obj_align(MODAL_OK, LV_ALIGN_BOTTOM_RIGHT, -8, -8);
-    lv_obj_set_style_bg_color(MODAL_OK, lv_color_hex(0xDA3633), LV_PART_MAIN);
+    r1_lv_obj_set_style_bg_color(MODAL_OK, r1_lv_color_hex(0xDA3633), LV_PART_MAIN);
     lv_obj_add_event_cb(MODAL_OK, Some(exec_action_cb), LV_EVENT_CLICKED, ptr::null_mut());
     let ol = lv_label_create(MODAL_OK);
     set_label_str!(ol, "确认");
@@ -609,18 +612,18 @@ pub fn update(data: &SystemData) {
 
 unsafe fn update_disk_list(disks: &[crate::metrics::DiskHealth]) {
     lv_obj_clean(DISK_LIST);
-    let green = lv_color_hex(0x3FB950);
-    let amber = lv_color_hex(0xD29922);
-    let red = lv_color_hex(0xDA3633);
-    let card_bg = lv_color_hex(0x161B22);
+    let green = r1_lv_color_hex(0x3FB950);
+    let amber = r1_lv_color_hex(0xD29922);
+    let red = r1_lv_color_hex(0xDA3633);
+    let card_bg = r1_lv_color_hex(0x161B22);
 
     for disk in disks {
         let card = lv_obj_create(DISK_LIST);
         lv_obj_set_size(card, lv_obj_get_width(DISK_LIST) - 8, 68);
-        lv_obj_set_style_bg_color(card, card_bg, LV_PART_MAIN);
-        lv_obj_set_style_radius(card, 6, LV_PART_MAIN);
-        lv_obj_set_style_border_width(card, 0, LV_PART_MAIN);
-        lv_obj_set_style_pad_all(card, 6, LV_PART_MAIN);
+        r1_lv_obj_set_style_bg_color(card, card_bg, LV_PART_MAIN);
+        r1_lv_obj_set_style_radius(card, 6, LV_PART_MAIN);
+        r1_lv_obj_set_style_border_width(card, 0, LV_PART_MAIN);
+        r1_lv_obj_set_style_pad_all(card, 6, LV_PART_MAIN);
 
         // Name + size
         let name = cstr!(format!("{}  {}", disk.model, disk.size));
@@ -646,7 +649,7 @@ unsafe fn update_disk_list(disks: &[crate::metrics::DiskHealth]) {
             lv_bar_set_range(bar, 0, 100);
             lv_bar_set_value(bar, mt.percent as i32, LV_ANIM_OFF);
             let bar_color = if mt.percent >= 90.0 { red } else if mt.percent >= 75.0 { amber } else { green };
-            lv_obj_set_style_bg_color(bar, bar_color, LV_PART_INDICATOR);
+            r1_lv_obj_set_style_bg_color(bar, bar_color, LV_PART_INDICATOR);
         }
     }
 }
@@ -657,17 +660,17 @@ unsafe fn update_item_list<T>(
     display: impl Fn(&T) -> (String, String, bool),
 ) {
     lv_obj_clean(list);
-    let green_bg = lv_color_hex(0x1B3D1F);
-    let red_bg = lv_color_hex(0x3D1B1B);
+    let green_bg = r1_lv_color_hex(0x1B3D1F);
+    let red_bg = r1_lv_color_hex(0x3D1B1B);
 
     for item in items {
         let (name, _detail, active) = display(item);
         let row = lv_obj_create(list);
         lv_obj_set_size(row, lv_obj_get_width(list) - 8, 32);
-        lv_obj_set_style_bg_opa(row, 0, LV_PART_MAIN);
-        lv_obj_set_style_border_width(row, 0, LV_PART_MAIN);
-        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        r1_lv_obj_set_style_bg_opa(row, 0, LV_PART_MAIN);
+        r1_lv_obj_set_style_border_width(row, 0, LV_PART_MAIN);
+        r1_lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+        r1_lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
         let nl = lv_label_create(row);
         set_label_str!(nl, name);
@@ -675,9 +678,9 @@ unsafe fn update_item_list<T>(
         let status = if active { "运行" } else { "停止" };
         let badge = lv_obj_create(row);
         lv_obj_set_size(badge, 56, 24);
-        lv_obj_set_style_bg_color(badge, if active { green_bg } else { red_bg }, LV_PART_MAIN);
-        lv_obj_set_style_radius(badge, 4, LV_PART_MAIN);
-        lv_obj_set_style_border_width(badge, 0, LV_PART_MAIN);
+        r1_lv_obj_set_style_bg_color(badge, if active { green_bg } else { red_bg }, LV_PART_MAIN);
+        r1_lv_obj_set_style_radius(badge, 4, LV_PART_MAIN);
+        r1_lv_obj_set_style_border_width(badge, 0, LV_PART_MAIN);
         let bl = lv_label_create(badge);
         set_label_str!(bl, status);
         lv_obj_center(bl);
@@ -686,16 +689,16 @@ unsafe fn update_item_list<T>(
 
 unsafe fn update_svc_list(svcs: &[crate::metrics::ServiceStatus]) {
     lv_obj_clean(SVC_LIST);
-    let green_bg = lv_color_hex(0x1B3D1F);
-    let red_bg = lv_color_hex(0x3D1B1B);
+    let green_bg = r1_lv_color_hex(0x1B3D1F);
+    let red_bg = r1_lv_color_hex(0x3D1B1B);
 
     for svc in svcs {
         let row = lv_obj_create(SVC_LIST);
         lv_obj_set_size(row, lv_obj_get_width(SVC_LIST) - 8, 28);
-        lv_obj_set_style_bg_opa(row, 0, LV_PART_MAIN);
-        lv_obj_set_style_border_width(row, 0, LV_PART_MAIN);
-        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        r1_lv_obj_set_style_bg_opa(row, 0, LV_PART_MAIN);
+        r1_lv_obj_set_style_border_width(row, 0, LV_PART_MAIN);
+        r1_lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+        r1_lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
         let nl = lv_label_create(row);
         set_label_str!(nl, svc.name.as_str());
@@ -703,9 +706,9 @@ unsafe fn update_svc_list(svcs: &[crate::metrics::ServiceStatus]) {
         let status = if svc.active { "活跃" } else { "停用" };
         let badge = lv_obj_create(row);
         lv_obj_set_size(badge, 48, 20);
-        lv_obj_set_style_radius(badge, 4, LV_PART_MAIN);
-        lv_obj_set_style_bg_color(badge, if svc.active { green_bg } else { red_bg }, LV_PART_MAIN);
-        lv_obj_set_style_border_width(badge, 0, LV_PART_MAIN);
+        r1_lv_obj_set_style_radius(badge, 4, LV_PART_MAIN);
+        r1_lv_obj_set_style_bg_color(badge, if svc.active { green_bg } else { red_bg }, LV_PART_MAIN);
+        r1_lv_obj_set_style_border_width(badge, 0, LV_PART_MAIN);
         let bl = lv_label_create(badge);
         set_label_str!(bl, status);
         lv_obj_center(bl);
