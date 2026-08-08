@@ -1,82 +1,73 @@
-# r1-panel (Rust + LVGL)
+# r1-panel Rust 原生面板
 
-HS-NAS-R1 面板的 Rust 重写版本。使用 LVGL 直接渲染到 DRM/KMS 帧缓冲，替代 cog + WPEWebKit 浏览器方案。
+海康威视 NAS R1 竖向触摸屏（`376×960 @ 56 Hz`）的 Rust 原生实现。运行版直接访问 DRM/KMS 和 evdev，不启动 Cog/WPE，也不依赖 LVGL。
 
-## 架构对比
+## 当前功能
 
+- CPU、内存环形仪表及温度/频率
+- 网卡上下行速率和 IP 地址
+- eMMC、NVMe、HDD 健康与容量
+- 核心服务、Docker 容器和 libvirt 虚拟机状态
+- 重启/关机确认弹窗
+- 纵向滚动、惯性滚动、横向循环翻页和点击
+- 双 dumb buffer + DRM page flip
+- 快速数据每 `500 ms` 更新，慢速清单每 `5 s` 更新
+- 快速刷新只覆盖动态卡片和数值，不清空整屏
+
+## 模块
+
+```text
+src/
+├── main.rs            # 启动、事件循环和电源操作
+├── display.rs         # DRM/KMS、双缓冲、page flip、链路维护
+├── input.rs           # evdev 多点触摸和手势识别
+├── interaction.rs     # 滚动、惯性和切页动画状态
+├── metrics.rs         # /proc、/sys 和系统命令的数据模型与采集器
+├── metrics_worker.rs  # 500 ms 快采样和 5 s 慢采样后台线程
+├── render.rs          # 软件栅格器、字体缓存和 BMP 输出
+└── view.rs            # 固定布局、动态区域刷新和弹窗
 ```
-旧方案:
-  Go 后端 (14 MB) → HTTP API → cog (96 MB) → WPEWebProcess (750+ MB)
-  总内存: ~866 MB
 
-新方案:
-  Rust 单二进制 → LVGL → DRM 帧缓冲
-  总内存: ~10 MB
-```
+`assets/emoji/` 中的 RGBA 图标通过 `include_bytes!` 编译进程序。`assets/emoji.ttf` 只用于 `tools/extract_emoji_bitmaps.py` 重新生成这些图标，不是运行时依赖。
 
-## 构建
+## 构建与测试
 
-### 前置条件
 ```bash
-# 克隆 LVGL C 库
+source "$HOME/.cargo/env"
 cd rust-lvgl-panel
-git submodule add https://github.com/lvgl/lvgl.git lvgl
-cd lvgl && git checkout v9.2.0 && cd ..
-
-# 构建 (需要 Linux + DRM 开发头文件)
-cargo build --release
+cargo fmt --all --check
+cargo check --locked --target x86_64-unknown-linux-gnu
+cargo test --locked --target x86_64-unknown-linux-musl
+cargo build --locked --release --target x86_64-unknown-linux-musl
 ```
 
-### NAS 上构建
-```bash
-# 在 NAS 上安装 Rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+发布产物：
 
-# 安装依赖
-apt install -y libdrm-dev pkg-config
-
-# 构建
-cd rust-lvgl-panel
-git submodule update --init
-cargo build --release
+```text
+target/x86_64-unknown-linux-musl/release/r1-panel
 ```
 
-## 运行
+程序依次尝试系统中的 Droid、DejaVu 和 Noto 字体。也可以通过 `R1_PANEL_FONT=/path/to/font.ttf` 指定字体。
+
+## 截图模式
+
+截图模式不打开 DRM 和 evdev：
 
 ```bash
-# 停止旧的 Go 版
-systemctl stop r1-panel
-
-# 运行新版本
-./target/release/r1-panel
+R1_PANEL_PAGE=overview R1_PANEL_SCROLL=0 ./r1-panel --screenshot overview.bmp
+R1_PANEL_PAGE=services R1_PANEL_SCROLL=900 ./r1-panel --screenshot services-bottom.bmp
+R1_PANEL_MODAL=reboot ./r1-panel --screenshot modal.bmp
 ```
 
-## 项目结构
+## 运行与稳定性
 
-```
-rust-lvgl-panel/
-├── Cargo.toml          # Rust 项目配置
-├── build.rs            # 编译 C LVGL 库
-├── lv_conf.h           # LVGL 配置 (最小功能集)
-├── lvgl/               # LVGL C 源码 (git submodule)
-└── src/
-    ├── main.rs         # 入口 + 事件循环
-    ├── display.rs      # DRM/KMS 显示初始化
-    ├── input.rs        # 触摸屏 evdev 输入
-    ├── metrics.rs      # 系统指标采集 (/proc, /sys)
-    └── ui.rs           # LVGL 界面 (2 页面板)
-```
+- 快速和慢速更新通道均为容量 1 的有界 channel，旧样本会被覆盖，不会无限积压。
+- `smartctl`、`docker`、`virsh`、`systemctl` 等慢命令只在后台采集线程中执行。
+- DRM 两个 dumb buffer 在退出时解除映射并销毁；链路维护线程共享停止标志。
+- 动态更新不重建页面，只有慢清单或布局变化才触发整页重绘。
+- 无触摸、动画和待更新数据时，主循环只进行轻量轮询。
 
-## 特性
+## 分支说明
 
-- [x] CPU 使用率环形图 + 温度/频率
-- [x] 内存使用率环形图
-- [x] 网络速率 + IP 显示
-- [x] 磁盘健康状态 + 使用率进度条
-- [x] Docker 容器列表
-- [x] 虚拟机列表
-- [x] 核心服务状态
-- [x] 重启/关机确认对话框
-- [x] 触摸滑动手势切换页面
-- [x] 5 秒自动刷新
-- [x] 增量 UI 更新 (LVGL 原生支持)
+- `master`：当前 Rust 原生主线。
+- `cog`：切换主线前的旧 Go + Cog 实现备份。

@@ -1,3 +1,0 @@
-[submodule "rust-lvgl-panel/lvgl"]
-	path = rust-lvgl-panel/lvgl
-	url = https://github.com/lvgl/lvgl.git

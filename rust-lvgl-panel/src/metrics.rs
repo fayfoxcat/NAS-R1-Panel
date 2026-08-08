@@ -4,7 +4,9 @@
 use std::collections::HashMap;
 use std::fs;
 use std::process::Command;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::{Mutex, OnceLock};
+
+use serde::Deserialize;
 
 // ── Public data structures ─────────────────────────────────
 
@@ -13,7 +15,6 @@ pub struct SystemData {
     pub cpu: CpuData,
     pub memory: MemoryData,
     pub gpu: GpuData,
-    pub storage: Vec<StorageMount>,
     pub disks: Vec<DiskHealth>,
     pub network: Vec<NetworkIface>,
     pub docker: Vec<DockerContainer>,
@@ -23,10 +24,51 @@ pub struct SystemData {
     pub hostname: String,
 }
 
+/// Values that are cheap to sample and should remain responsive on screen.
+/// This payload is intentionally separate from the command-heavy inventory
+/// data so the UI can refresh every 500 ms without invoking smartctl/docker/
+/// virsh/systemctl on the render path.
+#[derive(Debug, Clone, Default)]
+pub struct FastData {
+    pub cpu: CpuData,
+    pub memory: MemoryData,
+    pub gpu: GpuData,
+    pub network: Vec<NetworkIface>,
+    pub uptime: UptimeData,
+}
+
+/// Values that change slowly and require external commands or filesystem
+/// walks. These are refreshed independently every few seconds.
+#[derive(Debug, Clone, Default)]
+pub struct SlowData {
+    pub disks: Vec<DiskHealth>,
+    pub docker: Vec<DockerContainer>,
+    pub vms: Vec<VirtualMachine>,
+    pub services: Vec<ServiceStatus>,
+    pub hostname: String,
+}
+
+impl SystemData {
+    pub fn apply_fast(&mut self, fast: FastData) {
+        self.cpu = fast.cpu;
+        self.memory = fast.memory;
+        self.gpu = fast.gpu;
+        self.network = fast.network;
+        self.uptime = fast.uptime;
+    }
+
+    pub fn apply_slow(&mut self, slow: SlowData) {
+        self.disks = slow.disks;
+        self.docker = slow.docker;
+        self.vms = slow.vms;
+        self.services = slow.services;
+        self.hostname = slow.hostname;
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct CpuData {
     pub percent: f64,
-    pub count: u32,
     pub freq_mhz: Option<f64>,
     pub temperature_c: Option<f64>,
 }
@@ -35,34 +77,17 @@ pub struct CpuData {
 pub struct MemoryData {
     pub total_gb: f64,
     pub used_gb: f64,
-    pub available_gb: f64,
     pub percent: f64,
-    pub swap_total_gb: f64,
-    pub swap_used_gb: f64,
-    pub swap_percent: f64,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct GpuData {
-    pub name: String,
     pub freq_mhz: Option<u32>,
-}
-
-#[derive(Debug, Clone)]
-pub struct StorageMount {
-    pub device: String,
-    pub mount: String,
-    pub fstype: String,
-    pub total_gb: f64,
-    pub used_gb: f64,
-    pub free_gb: f64,
-    pub percent: f64,
 }
 
 #[derive(Debug, Clone)]
 pub struct DiskHealth {
     pub name: String,
-    pub device: String,
     pub size: String,
     pub model: String,
     pub health: Option<String>,
@@ -79,8 +104,6 @@ pub struct DiskMount {
     pub mount: String,
     pub total_gb: f64,
     pub used_gb: f64,
-    pub free_gb: f64,
-    pub percent: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -92,14 +115,12 @@ pub struct NetworkIface {
     pub rx_speed: f64,
     pub tx_speed: f64,
     pub ipv4: Vec<String>,
-    pub ipv6: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct DockerContainer {
     pub names: String,
     pub state: String,
-    pub status: String,
 }
 
 #[derive(Debug, Clone)]
@@ -120,36 +141,43 @@ pub struct UptimeData {
     pub days: u64,
     pub hours: u64,
     pub minutes: u64,
-    pub str: String,
 }
 
 // ── Collection ─────────────────────────────────────────────
 
 const GB: f64 = 1024.0 * 1024.0 * 1024.0;
 
-pub fn collect() -> SystemData {
-    SystemData {
+pub fn collect_fast() -> FastData {
+    FastData {
         cpu: read_cpu(),
         memory: read_memory(),
         gpu: read_gpu(),
-        storage: read_storage(),
-        disks: read_disk_health(),
         network: read_network(),
+        uptime: read_uptime(),
+    }
+}
+
+pub fn collect_slow() -> SlowData {
+    SlowData {
+        disks: read_disk_health(),
         docker: read_docker(),
         vms: read_vms(),
         services: read_services(),
-        uptime: read_uptime(),
         hostname: read_hostname(),
     }
+}
+
+pub fn collect() -> SystemData {
+    let mut data = SystemData::default();
+    data.apply_fast(collect_fast());
+    data.apply_slow(collect_slow());
+    data
 }
 
 // ── CPU ────────────────────────────────────────────────────
 
 fn read_cpu() -> CpuData {
-    let mut cpu = CpuData {
-        count: num_cpus::get() as u32,
-        ..Default::default()
-    };
+    let mut cpu = CpuData::default();
 
     // CPU temperature from hwmon
     if let Ok(entries) = fs::read_dir("/sys/class/hwmon") {
@@ -170,9 +198,7 @@ fn read_cpu() -> CpuData {
     }
 
     // Frequency from sysfs
-    if let Ok(data) =
-        fs::read_to_string("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq")
-    {
+    if let Ok(data) = fs::read_to_string("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq") {
         if let Ok(f) = data.trim().parse::<f64>() {
             cpu.freq_mhz = Some(round1(f / 1000.0));
         }
@@ -200,15 +226,21 @@ fn read_cpu_percent() -> f64 {
         None
     }
 
-    let a = match read_times() {
+    static PREVIOUS: OnceLock<Mutex<Option<Vec<f64>>>> = OnceLock::new();
+    let current = match read_times() {
         Some(v) => v,
         None => return 0.0,
     };
-    std::thread::sleep(Duration::from_millis(200));
-    let b = match read_times() {
-        Some(v) => v,
-        None => return 0.0,
+
+    let previous = PREVIOUS.get_or_init(|| Mutex::new(None));
+    let mut previous = previous
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(old) = previous.replace(current.clone()) else {
+        return 0.0;
     };
+    let a = old;
+    let b = current;
 
     if a.len() < 4 || b.len() < 4 {
         return 0.0;
@@ -238,19 +270,14 @@ fn read_memory() -> MemoryData {
     let buffers = *meminfo.get("Buffers").unwrap_or(&0);
     let cached = *meminfo.get("Cached").unwrap_or(&0);
 
-    let avail = if avail > 0 { avail } else { free + buffers + cached };
-    let used = total - avail;
+    let avail = if avail > 0 {
+        avail
+    } else {
+        free + buffers + cached
+    };
+    let used = total.saturating_sub(avail);
     let percent = if total > 0 {
         round1(used as f64 / total as f64 * 100.0)
-    } else {
-        0.0
-    };
-
-    let swap_total = *meminfo.get("SwapTotal").unwrap_or(&0);
-    let swap_free = *meminfo.get("SwapFree").unwrap_or(&0);
-    let swap_used = swap_total - swap_free;
-    let swap_percent = if swap_total > 0 {
-        round1(swap_used as f64 / swap_total as f64 * 100.0)
     } else {
         0.0
     };
@@ -258,11 +285,7 @@ fn read_memory() -> MemoryData {
     MemoryData {
         total_gb: round1(total as f64 / (1024.0 * 1024.0)),
         used_gb: round1(used as f64 / (1024.0 * 1024.0)),
-        available_gb: round1(avail as f64 / (1024.0 * 1024.0)),
         percent,
-        swap_total_gb: round1(swap_total as f64 / (1024.0 * 1024.0)),
-        swap_used_gb: round1(swap_used as f64 / (1024.0 * 1024.0)),
-        swap_percent,
     }
 }
 
@@ -287,79 +310,13 @@ fn read_meminfo() -> HashMap<String, i64> {
 // ── GPU ────────────────────────────────────────────────────
 
 fn read_gpu() -> GpuData {
-    let mut gpu = GpuData {
-        name: "Intel UHD Graphics (N100)".into(),
-        ..Default::default()
-    };
+    let mut gpu = GpuData::default();
     if let Ok(data) = fs::read_to_string("/sys/class/drm/card1/gt_cur_freq_mhz") {
         if let Ok(f) = data.trim().parse() {
             gpu.freq_mhz = Some(f);
         }
     }
     gpu
-}
-
-// ── Storage ────────────────────────────────────────────────
-
-fn read_storage() -> Vec<StorageMount> {
-    let mut mounts = Vec::new();
-    let data = match fs::read_to_string("/proc/mounts") {
-        Ok(d) => d,
-        Err(_) => return mounts,
-    };
-
-    let skip_fs = [
-        "proc", "sysfs", "devtmpfs", "devpts", "tmpfs", "cgroup", "cgroup2",
-        "pstore", "bpf", "securityfs", "debugfs", "tracefs", "hugetlbfs",
-        "mqueue", "configfs", "fusectl", "ramfs",
-    ];
-
-    for line in data.lines() {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 3 {
-            continue;
-        }
-        let dev = parts[0];
-        let mp = parts[1];
-        let fstype = parts[2];
-
-        if skip_fs.contains(&fstype) {
-            continue;
-        }
-
-        // Use libc::statfs
-        let total: u64;
-        let avail: u64;
-        let free: u64;
-        unsafe {
-            let mut stat: libc::statfs = std::mem::zeroed();
-            let c_path = std::ffi::CString::new(mp).unwrap();
-            if libc::statfs(c_path.as_ptr(), &mut stat) != 0 {
-                continue;
-            }
-            total = stat.f_blocks * stat.f_bsize as u64;
-            avail = stat.f_bavail * stat.f_bsize as u64;
-            free = stat.f_bfree * stat.f_bsize as u64;
-        }
-
-        let used = total.saturating_sub(free);
-        let percent = if total > 0 {
-            round1(used as f64 / total as f64 * 100.0)
-        } else {
-            0.0
-        };
-
-        mounts.push(StorageMount {
-            device: dev.to_string(),
-            mount: mp.to_string(),
-            fstype: fstype.to_string(),
-            total_gb: round1(total as f64 / GB),
-            used_gb: round1(used as f64 / GB),
-            free_gb: round1(avail as f64 / GB),
-            percent,
-        });
-    }
-    mounts
 }
 
 // ── Disk Health ────────────────────────────────────────────
@@ -372,10 +329,9 @@ fn read_disk_health() -> Vec<DiskHealth> {
     }
 
     // Get system disk
-    let system_dev = run_cmd("findmnt", &["-n", "-o", "SOURCE", "/"])
-        .trim_start_matches("/dev/")
-        .trim_end_matches(|c: char| c.is_ascii_digit() || c == 'p')
-        .to_string();
+    let system_source = run_cmd("findmnt", &["-n", "-o", "SOURCE", "/"]);
+    let system_dev = base_disk_name(system_source.trim());
+    let mount_disk_map = build_mount_disk_map();
 
     for line in output.lines() {
         let parts: Vec<&str> = line.split_whitespace().collect();
@@ -384,14 +340,20 @@ fn read_disk_health() -> Vec<DiskHealth> {
         }
         let name = parts[0];
         let size = parts[1];
-        let model = if parts.len() > 3 { parts[3..].join(" ") } else { name.to_string() };
+        if (name.starts_with("mmcblk") && name.contains("boot")) || name.ends_with("rpmb") {
+            continue;
+        }
+        let model = if parts.len() > 3 {
+            parts[3..].join(" ")
+        } else {
+            name.to_string()
+        };
 
         let (role, disk_type) = classify_disk(name, &system_dev);
-        let mounts = read_disk_mounts(name);
+        let mounts = read_disk_mounts(name, &mount_disk_map);
 
         let mut disk = DiskHealth {
             name: name.to_string(),
-            device: format!("/dev/{}", name),
             size: size.to_string(),
             model,
             health: None,
@@ -427,9 +389,30 @@ fn read_disk_health() -> Vec<DiskHealth> {
     disks
 }
 
+fn base_disk_name(source: &str) -> String {
+    let name = source.trim_start_matches("/dev/");
+    if name.starts_with("nvme") || name.starts_with("mmcblk") {
+        if let Some(partition_marker) = name.rfind('p') {
+            if name[partition_marker + 1..]
+                .chars()
+                .all(|character| character.is_ascii_digit())
+            {
+                return name[..partition_marker].to_string();
+            }
+        }
+        return name.to_string();
+    }
+    name.trim_end_matches(|character: char| character.is_ascii_digit())
+        .to_string()
+}
+
 fn classify_disk(name: &str, system_dev: &str) -> (&'static str, String) {
     if !system_dev.is_empty() && name.starts_with(system_dev) {
-        let dt = if name.starts_with("mmc") { "emmc" } else { "disk" };
+        let dt = if name.starts_with("mmc") {
+            "emmc"
+        } else {
+            "disk"
+        };
         ("system", dt.to_string())
     } else if name.starts_with("nvme") {
         ("ssd", "nvme".to_string())
@@ -442,41 +425,82 @@ fn classify_disk(name: &str, system_dev: &str) -> (&'static str, String) {
     }
 }
 
-fn read_disk_mounts(_disk_name: &str) -> Vec<DiskMount> {
-    // Simplified: iterate mounts from /proc/mounts and match by device prefix
-    let mut mounts = Vec::new();
-    if let Ok(data) = fs::read_to_string("/proc/mounts") {
-        for line in data.lines() {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() < 2 {
-                continue;
-            }
-            let dev = parts[0];
-            let mp = parts[1];
-            if !dev.starts_with("/dev/") {
-                continue;
-            }
-            unsafe {
-                let mut stat: libc::statfs = std::mem::zeroed();
-                let c_path = std::ffi::CString::new(mp).unwrap();
-                if libc::statfs(c_path.as_ptr(), &mut stat) != 0 {
-                    continue;
-                }
-                let total = stat.f_blocks * stat.f_bsize as u64;
-                let avail = stat.f_bavail * stat.f_bsize as u64;
-                let free = stat.f_bfree * stat.f_bsize as u64;
-                let used = total.saturating_sub(free);
-                let percent = if total > 0 { round1(used as f64 / total as f64 * 100.0) } else { 0.0 };
-                mounts.push(DiskMount {
-                    mount: mp.to_string(),
-                    total_gb: round1(total as f64 / GB),
-                    used_gb: round1(used as f64 / GB),
-                    free_gb: round1(avail as f64 / GB),
-                    percent,
-                });
+#[derive(Deserialize)]
+struct LsblkTree {
+    #[serde(default)]
+    blockdevices: Vec<LsblkDevice>,
+}
+
+#[derive(Deserialize)]
+struct LsblkDevice {
+    name: String,
+    #[serde(rename = "type")]
+    device_type: String,
+    mountpoint: Option<String>,
+    #[serde(default)]
+    children: Vec<LsblkDevice>,
+}
+
+fn build_mount_disk_map() -> HashMap<String, Vec<String>> {
+    let output = run_cmd("lsblk", &["-J", "-o", "NAME,TYPE,MOUNTPOINT"]);
+    let Ok(tree) = serde_json::from_str::<LsblkTree>(&output) else {
+        return HashMap::new();
+    };
+    fn walk(
+        device: &LsblkDevice,
+        disk_name: Option<&str>,
+        result: &mut HashMap<String, Vec<String>>,
+    ) {
+        let disk_name = if device.device_type == "disk" {
+            Some(device.name.as_str())
+        } else {
+            disk_name
+        };
+        if let (Some(mountpoint), Some(disk_name)) = (device.mountpoint.as_deref(), disk_name) {
+            let disks = result.entry(mountpoint.to_string()).or_default();
+            if !disks.iter().any(|item| item == disk_name) {
+                disks.push(disk_name.to_string());
             }
         }
+        for child in &device.children {
+            walk(child, disk_name, result);
+        }
     }
+    let mut result = HashMap::new();
+    for device in &tree.blockdevices {
+        walk(device, None, &mut result);
+    }
+    result
+}
+
+fn read_disk_mounts(
+    disk_name: &str,
+    mount_disk_map: &HashMap<String, Vec<String>>,
+) -> Vec<DiskMount> {
+    let mut mounts = Vec::new();
+    for (mountpoint, disks) in mount_disk_map {
+        if !disks.iter().any(|item| item == disk_name) {
+            continue;
+        }
+        unsafe {
+            let mut stat: libc::statfs = std::mem::zeroed();
+            let Ok(c_path) = std::ffi::CString::new(mountpoint.as_str()) else {
+                continue;
+            };
+            if libc::statfs(c_path.as_ptr(), &mut stat) != 0 {
+                continue;
+            }
+            let total = stat.f_blocks * stat.f_bsize as u64;
+            let free = stat.f_bfree * stat.f_bsize as u64;
+            let used = total.saturating_sub(free);
+            mounts.push(DiskMount {
+                mount: mountpoint.to_string(),
+                total_gb: round1(total as f64 / GB),
+                used_gb: round1(used as f64 / GB),
+            });
+        }
+    }
+    mounts.sort_by(|left, right| left.mount.cmp(&right.mount));
     mounts
 }
 
@@ -495,9 +519,12 @@ fn read_emmc_wear(name: &str, disk: &mut DiskHealth) {
         }
     }
     if let Ok(data) = fs::read_to_string(format!("{}pre_eol_info", base)) {
-        if data.trim() == "0x02" {
-            disk.health = Some("FAILED".to_string());
-        }
+        disk.health = match data.trim() {
+            "0x01" | "0x1" => Some("PASSED".to_string()),
+            "0x02" | "0x2" => Some("WARNING".to_string()),
+            "0x03" | "0x3" => Some("FAILED".to_string()),
+            _ => disk.health.take(),
+        };
     }
 }
 
@@ -535,8 +562,16 @@ fn parse_smart(out: &str, disk: &mut DiskHealth) {
 // ── Network ────────────────────────────────────────────────
 
 fn read_network() -> Vec<NetworkIface> {
+    static PREVIOUS: OnceLock<Mutex<(std::time::Instant, HashMap<String, (i64, i64)>)>> =
+        OnceLock::new();
     let curr = read_net_dev();
     let mut ifaces = Vec::new();
+    let now = std::time::Instant::now();
+    let previous = PREVIOUS.get_or_init(|| Mutex::new((now, HashMap::new())));
+    let mut previous = previous
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let elapsed = now.duration_since(previous.0).as_secs_f64();
 
     for (name, (rx, tx)) in &curr {
         // Read IPs from /sys/class/net/<name>/ (simplified)
@@ -551,18 +586,30 @@ fn read_network() -> Vec<NetworkIface> {
             })
             .unwrap_or(false);
 
+        let (rx_speed, tx_speed) = previous
+            .1
+            .get(name)
+            .filter(|_| elapsed > 0.0)
+            .map(|(old_rx, old_tx)| {
+                (
+                    rx.saturating_sub(*old_rx) as f64 / elapsed,
+                    tx.saturating_sub(*old_tx) as f64 / elapsed,
+                )
+            })
+            .unwrap_or((0.0, 0.0));
+
         ifaces.push(NetworkIface {
             name: name.clone(),
             is_up,
             rx_bytes: *rx,
             tx_bytes: *tx,
-            rx_speed: 0.0,
-            tx_speed: 0.0,
+            rx_speed,
+            tx_speed,
             ipv4: ips_v4,
-            ipv6: Vec::new(),
         });
     }
 
+    *previous = (now, curr);
     ifaces
 }
 
@@ -608,15 +655,17 @@ fn read_net_dev() -> HashMap<String, (i64, i64)> {
 // ── Docker ─────────────────────────────────────────────────
 
 fn read_docker() -> Vec<DockerContainer> {
-    let out = run_cmd("docker", &["ps", "-a", "--format", "{{.Names}}\t{{.State}}\t{{.Status}}"]);
+    let out = run_cmd(
+        "docker",
+        &["ps", "-a", "--format", "{{.Names}}\t{{.State}}"],
+    );
     let mut containers = Vec::new();
     for line in out.lines() {
         let parts: Vec<&str> = line.split('\t').collect();
-        if parts.len() >= 3 {
+        if parts.len() >= 2 {
             containers.push(DockerContainer {
                 names: parts[0].to_string(),
                 state: parts[1].to_string(),
-                status: parts[2].to_string(),
             });
         }
     }
@@ -682,7 +731,6 @@ fn read_uptime() -> UptimeData {
         days,
         hours,
         minutes,
-        str: format!("{}天 {}时 {}分", days, hours, minutes),
     }
 }
 
@@ -704,4 +752,18 @@ fn run_cmd(cmd: &str, args: &[&str]) -> String {
 
 fn round1(v: f64) -> f64 {
     (v * 10.0 + 0.5).floor() / 10.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::base_disk_name;
+
+    #[test]
+    fn extracts_base_disk_from_linux_device_names() {
+        assert_eq!(base_disk_name("/dev/mmcblk0p2"), "mmcblk0");
+        assert_eq!(base_disk_name("/dev/nvme0n1p3"), "nvme0n1");
+        assert_eq!(base_disk_name("/dev/sda1"), "sda");
+        assert_eq!(base_disk_name("/dev/mmcblk0"), "mmcblk0");
+        assert_eq!(base_disk_name("/dev/nvme1n1"), "nvme1n1");
+    }
 }

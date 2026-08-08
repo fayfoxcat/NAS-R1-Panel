@@ -1,2 +1,9 @@
-r1-panel
+/r1-panel
+/r1-panel-linux
+/*.bmp
+/*.png
+/*.raw
 *.exe
+
+# Local font copy used only for screenshot comparison.
+/rust-lvgl-panel/DroidSansFallbackFull.ttf

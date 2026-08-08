@@ -10,23 +10,46 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust-lvgl-panel
+
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      - name: Install Rust musl toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
-          go-version: '1.21'
+          targets: x86_64-unknown-linux-musl
+          components: rustfmt
 
-      - name: Build
+      - name: Install musl linker
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Test
+        run: cargo test --locked --target x86_64-unknown-linux-musl
+
+      - name: Build static release
+        run: cargo build --locked --release --target x86_64-unknown-linux-musl
+
+      - name: Prepare release files
         run: |
-          GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o r1-panel .
-          ls -lh r1-panel
+          cp target/x86_64-unknown-linux-musl/release/r1-panel ../r1-panel
+          cd ..
+          sha256sum r1-panel > r1-panel.sha256
 
-      - name: Release
+      - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          files: r1-panel
+          files: |
+            r1-panel
+            r1-panel.sha256
           body: |
-            HS-NAS-R1-Panel ${{ github.ref_name }}
+            HS-NAS-R1 Panel ${{ github.ref_name }}
 
-            `curl -sSL https://raw.githubusercontent.com/fayfoxcat/HS-NAS-R1-Panel/master/install.sh | sudo bash`
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/fayfoxcat/HS-NAS-R1-Panel/master/install.sh | sudo bash
+            ```

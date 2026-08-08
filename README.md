@@ -1,163 +1,87 @@
-# HS-NAS-R1-Panel
+# HS-NAS-R1 Panel
 
-海康威视 NAS R1 产品自带一块 376×960 可触摸 LCD 显示屏，但在刷入第三方 NAS 系统（如 Debian/OMV/Truenas）后屏幕无法继续使用。本项目为该屏幕开发了一套 NAS 状态仪表盘，实时显示系统信息并支持触屏交互。
+海康威视 NAS R1 的 `376×960` 竖向触摸屏状态面板。`master` 是 Rust 原生 DRM/KMS 主线，直接驱动显示和 evdev 触摸设备，不依赖 Cog、WPE WebKit 或 LVGL。旧 Go + Cog 实现完整保存在 `cog` 分支。
 
 ## 功能
 
-- **环形仪表盘** — CPU / 内存实时占用，动画过渡
-- **存储健康** — NVMe SSD / SATA HDD / eMMC 全盘 SMART 健康监测、温度、损耗率、容量进度条
-- **网络带宽** — 活动网卡上下行实时速率、IPv4 地址
-- **Docker 状态** — 容器列表、运行状态
-- **虚拟机** — libvirt VM 列表及状态
-- **核心服务** — Docker / libvirtd / NetworkManager 等守护进程状态
-- **重启 / 关机** — 二次确认弹窗，防误触
-- **屏幕休眠** — 3 分钟无触摸自动关闭屏幕（DPMS），触摸唤醒
-- **触屏滑动** — 左右滑动切换面板，竖屏滚动浏览
+- CPU、内存、温度、频率和使用率环形图
+- 网络上下行速率（`B/s`、`KB/s`、`MB/s`、`GB/s`）及 IPv4
+- eMMC、NVMe、HDD 健康、温度、损耗和容量进度条
+- 核心服务、Docker 容器和 libvirt 虚拟机状态
+- 重启/关机二次确认
+- 纵向滚动、惯性滚动、横向循环翻页和点击
+- DRM 双缓冲 + page flip
+- 快速指标每 `500 ms` 更新，慢速清单每 `5 s` 更新；动态数据局部重绘
 
-## 屏幕展示
+## 一键安装
 
-```
-┌─────────┐
-│  📊 概况 │  ← 面板 0：环形 CPU/MEM、网络带宽、存储健康
-│   (滑动) │
-│  ⚙️ 服务 │  ← 面板 1：核心服务、Docker、VM、电源操作
-└─────────┘
-   376×960 竖屏 · 2.6×7cm 物理尺寸
-```
-
-## 技术架构
-
-```
-LCD 屏幕 ←──DRM/KMS── cog (WPE Kiosk 浏览器) ←──http://:8088── r1-panel (Go)
-                                                                    │
-                                              /proc /sys smartctl docker virsh
-```
-
-- **后端**：Go 标准库 `net/http`，零外部依赖
-- **前端**：原生 HTML/CSS/JS，`go:embed` 嵌入二进制
-- **渲染**：[cog](https://github.com/Igalia/cog) — WPE WebKit Kiosk 浏览器，DRM 直通 GPU
-- **编译**：单文件静态二进制，交叉编译 `GOOS=linux go build`
-- **打包**：5MB，scp 到 NAS 直接运行
-
-## 快速开始
-
-### 一键安装
+发布包是静态链接的 Linux x86_64 二进制。安装脚本会下载并校验最新版本，然后创建 `r1-panel.service`：
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/fayfoxcat/HS-NAS-R1-Panel/master/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/fayfoxcat/HS-NAS-R1-Panel/master/install.sh | sudo bash
 ```
 
-脚本自动完成：安装依赖 → 下载/编译二进制 → 配置 systemd 开机自启 → 启动屏幕显示。
+运行时可选使用系统已有的 `smartctl`、`docker`、`virsh` 和 `systemctl` 获取附加状态；缺少某个命令不会影响面板启动。
 
-### 编译
+## 代码结构
+
+```text
+rust-lvgl-panel/
+├── assets/emoji/          # 编译进二进制的界面图标
+├── src/main.rs            # 入口、事件循环和电源操作
+├── src/display.rs         # DRM/KMS、双缓冲和链路维护
+├── src/input.rs           # evdev 触摸与手势
+├── src/interaction.rs     # 滚动、惯性和切页动画
+├── src/metrics.rs         # 指标模型与采集器
+├── src/metrics_worker.rs  # 500 ms 快采样、5 s 慢采样
+├── src/render.rs          # Rust 软件渲染器
+└── src/view.rs            # 页面布局和增量绘制
+```
+
+旧 Go/Cog、Web 前端和 LVGL FFI 文件不再位于 `master`。需要查看或维护旧实现时切换到 `cog` 分支。
+
+## 构建与验证
+
+Linux/WSL 环境需要 Rust、`musl-tools` 以及 `x86_64-unknown-linux-musl` target：
 
 ```bash
-git clone https://github.com/fayfoxcat/HS-NAS-R1-Panel.git
-cd HS-NAS-R1-Panel
-GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o r1-panel .
+cd rust-lvgl-panel
+cargo fmt --all --check
+cargo check --locked --target x86_64-unknown-linux-gnu
+cargo test --locked --target x86_64-unknown-linux-musl
+cargo build --locked --release --target x86_64-unknown-linux-musl
 ```
 
-### 部署到 NAS
+产物：
 
-**首次部署需安装依赖（仅一次）：**
+```text
+rust-lvgl-panel/target/x86_64-unknown-linux-musl/release/r1-panel
+```
+
+无 DRM 设备时可以直接生成 `376×960` BMP 截图：
 
 ```bash
-# 屏幕渲染器（NAS 出厂不含）
-apt install cog
-
-# 磁盘健康读取（通常已预装）
-apt install smartmontools
+R1_PANEL_PAGE=overview ./target/x86_64-unknown-linux-musl/release/r1-panel --screenshot overview.bmp
+R1_PANEL_PAGE=services R1_PANEL_SCROLL=900 ./target/x86_64-unknown-linux-musl/release/r1-panel --screenshot services-bottom.bmp
+R1_PANEL_MODAL=reboot ./target/x86_64-unknown-linux-musl/release/r1-panel --screenshot reboot.bmp
 ```
 
-> Emoji 字体已内嵌在二进制中（15KB 子集），无需额外安装。
+推送 `v*` tag 会由 GitHub Actions 运行格式检查、测试和 musl release 构建，并发布 `r1-panel` 与 SHA256 校验文件。
 
-**部署二进制：**
+## 开发机到 NAS 的安全测试流程
 
-```bash
-scp r1-panel root@nas:/opt/nas-panel/
-ssh root@nas
-chmod +x /opt/nas-panel/r1-panel
+测试部署应使用带 SHA256 前 8 位的新文件名，不覆盖或删除旧版本。停止旧进程前必须重新核对进程命令行，再优先发送 `SIGTERM`：
 
-# 直接运行（随机端口，仅本机可访问 + 屏幕显示）
-/opt/nas-panel/r1-panel
-
-# 指定端口，开放外部访问
-/opt/nas-panel/r1-panel -p 8088
-
-# 安装开机自启（默认随机端口 + 屏幕自启）
-/opt/nas-panel/r1-panel install
-systemctl enable r1-panel
-
-# 安装开机自启（开放外部访问）
-/opt/nas-panel/r1-panel install -p 8088
-
-# 卸载
-/opt/nas-panel/r1-panel uninstall
+```text
+scp r1-panel-rust-<hash> <nas>:/opt/r1-panel/
+ssh <nas>
+cd /opt/r1-panel
+chmod 755 r1-panel-rust-<hash>
+ps -ef | grep '[r]1-panel'
+kill -TERM <已核实的旧 PID>
+nohup env RUST_LOG=info ./r1-panel-rust-<hash> >rust-<hash>.log 2>&1 &
 ```
 
-### CLI 参数
+详细实现说明见 [rust-lvgl-panel/README.md](rust-lvgl-panel/README.md)，当前开发约束见 [会话交接文档.md](会话交接文档.md)。
 
-| 参数 | 说明 |
-|------|------|
-| `start` | 启动 Web 服务（默认行为） |
-| `start -p 8088` | 启动 Web，端口 8088，开放外部访问 |
-| `stop` | 停止运行中的 r1-panel + cog |
-| `install` | 安装 systemd 服务 + 屏幕自启 |
-| `install -p 8088` | 安装服务并开放外部访问 |
-| `uninstall` | 移除服务并终止进程 |
-
-不带参数运行显示帮助信息。
-
-### 访问
-
-- 屏幕：cog 自动显示
-- 浏览器：`http://<nas-ip>:8088`
-
-## NAS 系统要求
-
-- Linux x86_64（Debian 12+ 推荐）
-- root 权限（读取 SMART、操作 DPMS 屏幕休眠）
-- 可选：`smartctl`（SMART 监控）、`docker`、`virsh`（容器/VM 监控）
-
-## 项目结构
-
-```
-├── main.go                 # 入口，embed 前端，启动 HTTP
-├── frontend/               # HTML/CSS/JS 前端（go:embed 嵌入）
-│   ├── index.html
-│   ├── style.css
-│   └── app.js
-├── internal/
-│   ├── api.go              # REST 路由 + 重启/关机/屏幕控制
-│   ├── cpu.go              # /proc/stat + sysfs 频率/温度
-│   ├── memory.go           # /proc/meminfo
-│   ├── disk.go             # lsblk 树解析 + smartctl + eMMC sysfs 寿命
-│   ├── network.go          # /proc/net/dev + 网卡 IP
-│   ├── docker.go           # docker ps + virsh list + systemctl
-│   └── util.go             # runCmd, round1
-└── go.mod                  # 零外部依赖
-```
-
-## FAQ
-
-### 屏幕被 cog 覆盖，如何切回命令行？
-
-cog 只占用 DRM 帧缓冲，虚拟终端不受影响。插 USB 键盘：
-
-```
-Ctrl+Alt+F2   →  切到 tty2，登录修复网络
-Ctrl+Alt+F1   →  切回 tty1（cog 画面还在）
-pkill cog      →  在 tty2 执行，杀掉 cog 释放屏幕
-```
-
-### 一键安装后 cog 灰屏？
-
-cog 可能连着旧的随机端口。重启服务即可：
-
-```bash
-systemctl restart r1-panel
-```
-
-## License
-
-MIT
+MIT License
