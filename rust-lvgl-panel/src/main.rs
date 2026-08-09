@@ -242,7 +242,16 @@ fn main() {
                     }
                     render.set_framebuffer(display.render_ptr());
                     view::draw(&render, &data, page, scroll[page.index()], overlay);
-                    display.present();
+                    // The last scroll frame may still be flipping; wait briefly
+                    // so the overlay frame is queued now. A dropped frame while
+                    // a modal is open used to freeze the panel, because no
+                    // further present is attempted in that state.
+                    let flip_deadline =
+                        std::time::Instant::now() + std::time::Duration::from_millis(60);
+                    while !display.present() && std::time::Instant::now() < flip_deadline {
+                        display.poll_flip_events();
+                        std::thread::sleep(std::time::Duration::from_millis(2));
+                    }
                     display.poll_flip_events();
                 }
             }
@@ -332,19 +341,20 @@ fn main() {
             full_redraw_pending = true;
             dynamic_redraw_pending = false;
         }
-        if !touch_active
-            && !inertia_active
-            && swipe_anim.is_none()
-            && overlay == view::Overlay::None
-        {
+        if !touch_active && !inertia_active && swipe_anim.is_none() {
             render.set_framebuffer(display.render_ptr());
             if full_redraw_pending {
+                // Full redraws re-paint the overlay, so they keep running while
+                // a modal is open; they also re-queue a frame whose page flip
+                // was dropped, so the panel can never freeze on a lost frame.
                 view::draw(&render, &data, page, scroll[page.index()], overlay);
                 full_redraw_pending = false;
                 dynamic_redraw_pending = false;
                 display.present();
                 display.poll_flip_events();
-            } else if dynamic_redraw_pending {
+            } else if dynamic_redraw_pending && overlay == view::Overlay::None {
+                // Dynamic patches only repaint page regions; they must not run
+                // under a modal or the dim overlay would flicker in those spots.
                 view::draw_dynamic(&render, &data, page, scroll[page.index()]);
                 dynamic_redraw_pending = false;
                 display.present();
@@ -411,15 +421,20 @@ fn render_screenshot(path: PathBuf) {
 }
 
 fn execute_power(action: view::PowerAction) {
-    std::process::Command::new("sync").status().ok();
+    // Flush all pending writes first, then hand over to systemd's graceful
+    // shutdown sequence: running services get SIGTERM (and time to flush
+    // their own state), then every filesystem is unmounted cleanly before
+    // the reboot/poweroff. No --force is passed: a stuck service is killed
+    // by systemd's stop timeout instead of skipping the clean unmount.
     std::thread::spawn(move || {
+        std::process::Command::new("sync").status().ok();
         std::thread::sleep(std::time::Duration::from_millis(200));
         let command = match action {
             view::PowerAction::Reboot => "reboot",
             view::PowerAction::Shutdown => "poweroff",
         };
         std::process::Command::new("systemctl")
-            .args([command, "--force"])
+            .arg(command)
             .status()
             .ok();
     });
