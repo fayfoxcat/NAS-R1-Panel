@@ -10,9 +10,6 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: rust-lvgl-panel
 
     steps:
       - uses: actions/checkout@v4
@@ -37,8 +34,7 @@ jobs:
 
       - name: Prepare release files
         run: |
-          cp target/x86_64-unknown-linux-musl/release/r1-panel ../r1-panel
-          cd ..
+          cp target/x86_64-unknown-linux-musl/release/r1-panel r1-panel
           sha256sum r1-panel > r1-panel.sha256
 
       - name: Publish release

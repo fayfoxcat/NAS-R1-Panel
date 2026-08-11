@@ -4,6 +4,5 @@
 /*.png
 /*.raw
 *.exe
-
-# Local font copy used only for screenshot comparison.
-/rust-lvgl-panel/DroidSansFallbackFull.ttf
+/target/
+.idea/
