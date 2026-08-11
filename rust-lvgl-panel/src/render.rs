@@ -558,7 +558,7 @@ fn load_glyphs() -> (HashMap<(char, u32), CachedGlyph>, [i32; 9]) {
     let mut ascents = [0; 9];
     let mut chars: Vec<char> = (32u8..=126).map(char::from).collect();
     chars.extend(
-        "概况服务天时分内存网络存储核心活跃停用运行停止虚拟机电源操作重启关机确定将暂中断关闭需手动开恢复取消确认正常告警系统损耗无数据容器℃·↓↑？，。"
+        "概况服务天时分内存网络存储核心活跃停用运行停止虚拟机电源操作重启关机确定将暂中断关闭需手动开恢复取消确认正常告警系统损耗无数据容器已注意坏道℃·↓↑？，。"
             .chars(),
     );
     chars.sort_unstable();

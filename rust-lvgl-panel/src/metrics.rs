@@ -94,6 +94,11 @@ pub struct DiskHealth {
     pub temperature: Option<f64>,
     pub power_on_hours: Option<f64>,
     pub percent_used: Option<f64>,
+    /// eMMC only: percentage of rated life already consumed, as a range
+    /// derived from the EXT_CSD life_time estimate.
+    pub life_range: Option<(u32, u32)>,
+    /// HDD only: raw value of SMART attribute 5 (Reallocated_Sector_Ct).
+    pub reallocated_sectors: Option<u64>,
     pub disk_type: String,
     pub role: String,
     pub mounts: Vec<DiskMount>,
@@ -360,6 +365,8 @@ fn read_disk_health() -> Vec<DiskHealth> {
             temperature: None,
             power_on_hours: None,
             percent_used: None,
+            life_range: None,
+            reallocated_sectors: None,
             disk_type: disk_type.clone(),
             role: role.to_string(),
             mounts,
@@ -506,16 +513,31 @@ fn read_disk_mounts(
 
 fn read_emmc_wear(name: &str, disk: &mut DiskHealth) {
     let base = format!("/sys/block/{}/device/", name);
+    // eMMC has no power-on-hours counter (EXT_CSD exposes none and smartctl
+    // does not support MMC), so the closest life indicators are the EXT_CSD
+    // life_time estimate, the pre_eol_info flag and the manufacturing date.
+    // lsblk reports no model for MMC; its sysfs name is the device part
+    // number (e.g. Y0S256), which is a better title than the block name.
+    if disk.model == disk.name {
+        if let Ok(data) = fs::read_to_string(format!("{}name", base)) {
+            let device_name = data.trim();
+            if !device_name.is_empty() {
+                disk.model = device_name.to_string();
+            }
+        }
+    }
+    // EXT_CSD life_time (field 268/269): 0x0 = 0-10% consumed, 0x1 = 10-20%,
+    // ... 0x9 = 90-100%, 0xA/0xB = beyond rated life. Two values are
+    // reported (A/B for different memory types); the larger one is shown.
     if let Ok(data) = fs::read_to_string(format!("{}life_time", base)) {
+        let mut worst = 0u32;
         for val in data.split_whitespace() {
             if let Ok(v) = u32::from_str_radix(val.trim_start_matches("0x"), 16) {
-                if (1..=11).contains(&v) {
-                    let w = (v - 1) as f64 * 10.0;
-                    if disk.percent_used.map_or(true, |p| w > p) {
-                        disk.percent_used = Some(w);
-                    }
-                }
+                worst = worst.max(v);
             }
+        }
+        if worst <= 0x0B {
+            disk.life_range = Some((worst * 10, (worst + 1) * 10));
         }
     }
     if let Ok(data) = fs::read_to_string(format!("{}pre_eol_info", base)) {
@@ -529,6 +551,16 @@ fn read_emmc_wear(name: &str, disk: &mut DiskHealth) {
 }
 
 fn parse_smart(out: &str, disk: &mut DiskHealth) {
+    // ATA attribute lines end with the raw value, optionally followed by a
+    // parenthesized breakdown, e.g. "194 Temperature_Celsius ... - 44 (0 11 0)".
+    fn raw_value(line: &str) -> Option<f64> {
+        line.split('(')
+            .next()
+            .unwrap_or(line)
+            .split_whitespace()
+            .last()
+            .and_then(|value| value.replace(',', "").parse().ok())
+    }
     for line in out.lines() {
         let low = line.to_lowercase();
         if low.contains("overall-health") {
@@ -538,8 +570,14 @@ fn parse_smart(out: &str, disk: &mut DiskHealth) {
                 disk.health = Some("FAILED".to_string());
             }
         } else if low.starts_with("temperature:") {
+            // NVMe-style header line: "Temperature: 46 Celsius"
             let parts: Vec<&str> = line.split_whitespace().collect();
             if let Some(t) = parts.get(1).and_then(|s| s.parse().ok()) {
+                disk.temperature = Some(t);
+            }
+        } else if low.contains("temperature_celsius") {
+            // ATA attribute 194: "194 Temperature_Celsius ... - 44"
+            if let Some(t) = raw_value(line) {
                 disk.temperature = Some(t);
             }
         } else if low.contains("percentage used:") {
@@ -549,11 +587,22 @@ fn parse_smart(out: &str, disk: &mut DiskHealth) {
                     disk.percent_used = Some(f);
                 }
             }
+        } else if low.contains("power_on_hours") {
+            // ATA attribute 9: "9 Power_On_Hours ... - 16402"
+            if let Some(h) = raw_value(line) {
+                disk.power_on_hours = Some(h);
+            }
         } else if low.starts_with("power on hours:") {
+            // NVMe-style header line: "Power On Hours: 23,230"
             if let Some(val) = line.split(':').nth(1) {
                 if let Ok(h) = val.trim().replace(',', "").parse::<f64>() {
                     disk.power_on_hours = Some(h);
                 }
+            }
+        } else if low.contains("reallocated_sector") {
+            // ATA attribute 5: "5 Reallocated_Sector_Ct ... - 0"
+            if let Some(value) = raw_value(line) {
+                disk.reallocated_sectors = Some(value as u64);
             }
         }
     }

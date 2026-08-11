@@ -403,10 +403,13 @@ impl DrmDisplay {
         let deep_interval = std::time::Duration::from_secs(300);
         std::thread::spawn(move || {
             let mut last_refresh = std::time::Instant::now();
-            // First full pipe cycle happens about a minute after startup so a
-            // degraded link is recovered early for verification.
+            // The first full pipe cycle must wait until the system has fully
+            // settled after boot. A pipe off/on cycle in the first minutes
+            // after boot hits the i915 "Missing case (video_mode == 3)" DSI
+            // bug and can leave the link dead (gray screen); the same cycle
+            // after the link has stabilized is harmless.
             let mut last_deep =
-                std::time::Instant::now() - deep_interval + std::time::Duration::from_secs(60);
+                std::time::Instant::now() - deep_interval + std::time::Duration::from_secs(600);
             while running.load(Ordering::SeqCst) {
                 std::thread::sleep(std::time::Duration::from_millis(500));
                 if !running.load(Ordering::SeqCst) {

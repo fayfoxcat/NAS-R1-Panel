@@ -61,7 +61,7 @@ fn main() {
     let mut data = metrics::collect();
     let metric_updates = metrics_worker::spawn(running.clone());
     let mut page = view::Page::Overview;
-    let mut scroll = [0i32; 2];
+    let mut scroll = [0i32; 4];
     let mut overlay = view::Overlay::None;
     let mut scroll_velocity = 0.0f64;
     let mut scroll_fraction = 0.0f64;
@@ -331,10 +331,11 @@ fn main() {
         while let Ok(slow) = metric_updates.slow.try_recv() {
             data.apply_slow(slow);
             for (index, item) in scroll.iter_mut().enumerate() {
-                let item_page = if index == 0 {
-                    view::Page::Overview
-                } else {
-                    view::Page::Services
+                let item_page = match index {
+                    0 => view::Page::Overview,
+                    1 => view::Page::Services,
+                    2 => view::Page::Vms,
+                    _ => view::Page::Power,
                 };
                 *item = (*item).min(view::max_scroll(&data, item_page, display.height()));
             }
@@ -406,6 +407,8 @@ fn render_screenshot(path: PathBuf) {
         .unwrap_or(0);
     let page = match std::env::var("R1_PANEL_PAGE").as_deref() {
         Ok("services") => view::Page::Services,
+        Ok("vms") => view::Page::Vms,
+        Ok("power") => view::Page::Power,
         _ => view::Page::Overview,
     };
     let overlay = match std::env::var("R1_PANEL_MODAL").as_deref() {

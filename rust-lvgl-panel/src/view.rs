@@ -45,17 +45,17 @@ const MODAL_BUTTON_Y: i32 = 498;
 pub enum Page {
     Overview,
     Services,
+    Vms,
+    Power,
 }
 
 impl Page {
     pub fn shifted(self, delta: i32) -> Self {
+        const PAGES: [Page; 4] = [Page::Overview, Page::Services, Page::Vms, Page::Power];
         if delta == 0 {
             self
         } else {
-            match self {
-                Self::Overview => Self::Services,
-                Self::Services => Self::Overview,
-            }
+            PAGES[(self.index() as i32 + delta).rem_euclid(PAGES.len() as i32) as usize]
         }
     }
 
@@ -63,6 +63,8 @@ impl Page {
         match self {
             Self::Overview => 0,
             Self::Services => 1,
+            Self::Vms => 2,
+            Self::Power => 3,
         }
     }
 }
@@ -144,7 +146,7 @@ pub fn draw_dynamic(renderer: &Renderer, data: &SystemData, page: Page, scroll_y
                 draw_storage(renderer, data, storage_y);
             }
         }
-        Page::Services => {
+        Page::Services | Page::Vms | Page::Power => {
             if visible(renderer, HEADER_Y + offset, 62) {
                 clear_region(renderer, 0, HEADER_Y + offset, renderer.width() as i32, 62);
                 draw_header(renderer, data, page, offset);
@@ -166,7 +168,7 @@ pub fn draw_swipe(
     renderer: &Renderer,
     data: &SystemData,
     page: Page,
-    scroll: [i32; 2],
+    scroll: [i32; 4],
     drag_x: i32,
 ) {
     let width = renderer.width() as i32;
@@ -199,7 +201,7 @@ pub fn max_scroll(data: &SystemData, page: Page, viewport_height: u32) -> i32 {
 }
 
 pub fn hit_test(
-    data: &SystemData,
+    _data: &SystemData,
     page: Page,
     scroll_y: i32,
     overlay: Overlay,
@@ -215,10 +217,10 @@ pub fn hit_test(
         }
         return None;
     }
-    if overlay != Overlay::None || page != Page::Services {
+    if overlay != Overlay::None || page != Page::Power {
         return None;
     }
-    let power_y = service_layout(data).3 - scroll_y;
+    let power_y = SERVICES_Y - scroll_y;
     if inside(x, y, 30, power_y + 59, 316, 96) {
         Some(HitTarget::Reboot)
     } else if inside(x, y, 30, power_y + 167, 316, 96) {
@@ -234,6 +236,8 @@ fn draw_page(renderer: &Renderer, data: &SystemData, page: Page, scroll_y: i32) 
     match page {
         Page::Overview => draw_overview(renderer, data, offset),
         Page::Services => draw_services_page(renderer, data, offset),
+        Page::Vms => draw_vms_page(renderer, data, offset),
+        Page::Power => draw_power_page(renderer, data, offset),
     }
 }
 
@@ -241,6 +245,8 @@ fn draw_header(renderer: &Renderer, data: &SystemData, page: Page, offset: i32) 
     let (icon, title) = match page {
         Page::Overview => (UiIcon::Overview, "概况"),
         Page::Services => (UiIcon::Settings, "服务"),
+        Page::Vms => (UiIcon::Monitor, "虚拟机"),
+        Page::Power => (UiIcon::Warning, "电源操作"),
     };
     draw_icon(
         renderer,
@@ -251,11 +257,13 @@ fn draw_header(renderer: &Renderer, data: &SystemData, page: Page, offset: i32) 
         CYAN,
     );
     renderer.text_bold(74, HEADER_Y + 1 + offset, title, 8, CYAN);
-    let uptime = format!(
-        "{}天 {}时 {}分",
-        data.uptime.days, data.uptime.hours, data.uptime.minutes
-    );
-    renderer.text_right(362, HEADER_Y + 14 + offset, &uptime, 4, DIM);
+    if page == Page::Overview {
+        let uptime = format!(
+            "{}天 {}时 {}分",
+            data.uptime.days, data.uptime.hours, data.uptime.minutes
+        );
+        renderer.text_right(362, HEADER_Y + 14 + offset, &uptime, 4, DIM);
+    }
     renderer.rect(PAGE_PADDING_X, 75 + offset, PAGE_WIDTH as u32, 2, LINE);
 }
 
@@ -489,15 +497,12 @@ fn draw_disk(renderer: &Renderer, disk: &DiskHealth, y: i32, separator: bool) {
         type_fg,
     );
     if let Some(health) = &disk.health {
-        let healthy = health.eq_ignore_ascii_case("passed");
-        badge_x += badge(
-            renderer,
-            badge_x,
-            y + 49,
-            if healthy { "正常" } else { "告警" },
-            if healthy { 0x0014331C } else { 0x003A1717 },
-            if healthy { GREEN } else { RED },
-        );
+        let (label, bg, fg) = match health.to_ascii_uppercase().as_str() {
+            "PASSED" => ("正常", 0x0014331C, GREEN),
+            "WARNING" => ("注意", 0x003A3417, YELLOW),
+            _ => ("告警", 0x003A1717, RED),
+        };
+        badge_x += badge(renderer, badge_x, y + 49, label, bg, fg);
     }
     if disk.role == "system" {
         badge(renderer, badge_x, y + 49, "系统", 0x001A2A3A, CYAN);
@@ -510,7 +515,13 @@ fn draw_disk(renderer: &Renderer, disk: &DiskHealth, y: i32, separator: bool) {
     if let Some(temperature) = disk.temperature {
         meta.push(format!("{:.0}℃", temperature));
     }
-    if let Some(wear) = disk.percent_used {
+    if let Some(sectors) = disk.reallocated_sectors {
+        meta.push(format!("坏道{}", sectors));
+    }
+    if let Some((low, high)) = disk.life_range {
+        // eMMC: EXT_CSD life_time bucket, e.g. 10~20% of rated life used.
+        meta.push(format!("已耗{}~{}%", low, high));
+    } else if let Some(wear) = disk.percent_used {
         meta.push(format!("损耗{:.1}%", wear));
     }
     renderer.text_in_rect(
@@ -535,22 +546,34 @@ fn draw_services_page(renderer: &Renderer, data: &SystemData, offset: i32) {
     if visible(renderer, HEADER_Y + offset, 62) {
         draw_header(renderer, data, Page::Services, offset);
     }
-    let (services_y, docker_y, vms_y, power_y, _) = service_layout(data);
+    let (services_y, docker_y) = service_layout(data);
     let services_height =
         BLOCK_BASE_HEIGHT + data.services.len().max(1) as i32 * SERVICE_ROW_HEIGHT;
     let docker_height = BLOCK_BASE_HEIGHT + data.docker.len().max(1) as i32 * DOCKER_ROW_HEIGHT;
-    let vms_height = BLOCK_BASE_HEIGHT + data.vms.len().max(1) as i32 * VM_ROW_HEIGHT;
     if visible(renderer, services_y + offset, services_height) {
         draw_service_block(renderer, data, services_y + offset);
     }
     if visible(renderer, docker_y + offset, docker_height) {
         draw_docker_block(renderer, data, docker_y + offset);
     }
-    if visible(renderer, vms_y + offset, vms_height) {
-        draw_vm_block(renderer, data, vms_y + offset);
+}
+
+fn draw_vms_page(renderer: &Renderer, data: &SystemData, offset: i32) {
+    if visible(renderer, HEADER_Y + offset, 62) {
+        draw_header(renderer, data, Page::Vms, offset);
     }
-    if visible(renderer, power_y + offset, POWER_BLOCK_HEIGHT) {
-        draw_power_block(renderer, power_y + offset);
+    let vms_height = BLOCK_BASE_HEIGHT + data.vms.len().max(1) as i32 * VM_ROW_HEIGHT;
+    if visible(renderer, SERVICES_Y + offset, vms_height) {
+        draw_vm_block(renderer, data, SERVICES_Y + offset);
+    }
+}
+
+fn draw_power_page(renderer: &Renderer, data: &SystemData, offset: i32) {
+    if visible(renderer, HEADER_Y + offset, 62) {
+        draw_header(renderer, data, Page::Power, offset);
+    }
+    if visible(renderer, SERVICES_Y + offset, POWER_BLOCK_HEIGHT) {
+        draw_power_block(renderer, SERVICES_Y + offset);
     }
 }
 
@@ -872,10 +895,10 @@ fn draw_icon(renderer: &Renderer, icon: UiIcon, x: i32, y: i32, size: i32, color
 }
 
 fn draw_page_dots(renderer: &Renderer, page: Page) {
-    for index in 0..2 {
+    for index in 0..4 {
         let active = index == page.index();
         let width = if active { 30 } else { 12 };
-        let x = if index == 0 { 161 } else { 203 };
+        let x = 146 + index as i32 * 18;
         renderer.rounded_rect(x, 934, width, 12, 6, if active { CYAN } else { LINE });
     }
 }
@@ -947,28 +970,27 @@ fn disk_row_height(disk: &DiskHealth) -> i32 {
     }
 }
 
-fn service_layout(data: &SystemData) -> (i32, i32, i32, i32, i32) {
+fn service_layout(data: &SystemData) -> (i32, i32) {
     let services_height =
         BLOCK_BASE_HEIGHT + data.services.len().max(1) as i32 * SERVICE_ROW_HEIGHT;
-    let services_y = SERVICES_Y;
-    let docker_y = services_y + services_height + BLOCK_GAP;
-    let docker_height = BLOCK_BASE_HEIGHT + data.docker.len().max(1) as i32 * DOCKER_ROW_HEIGHT;
-    let vms_y = docker_y + docker_height + BLOCK_GAP;
-    let vms_height = BLOCK_BASE_HEIGHT + data.vms.len().max(1) as i32 * VM_ROW_HEIGHT;
-    let power_y = vms_y + vms_height + BLOCK_GAP;
-    (
-        services_y,
-        docker_y,
-        vms_y,
-        power_y,
-        power_y + POWER_BLOCK_HEIGHT + 70,
-    )
+    (SERVICES_Y, SERVICES_Y + services_height + BLOCK_GAP)
+}
+
+fn vms_block_height(data: &SystemData) -> i32 {
+    BLOCK_BASE_HEIGHT + data.vms.len().max(1) as i32 * VM_ROW_HEIGHT
 }
 
 fn content_height(data: &SystemData, page: Page) -> i32 {
     match page {
         Page::Overview => STORAGE_Y + storage_height(data) + 70,
-        Page::Services => service_layout(data).4,
+        Page::Services => {
+            service_layout(data).1
+                + BLOCK_BASE_HEIGHT
+                + data.docker.len().max(1) as i32 * DOCKER_ROW_HEIGHT
+                + 70
+        }
+        Page::Vms => SERVICES_Y + vms_block_height(data) + 70,
+        Page::Power => SERVICES_Y + POWER_BLOCK_HEIGHT + 70,
     }
 }
 
@@ -1071,14 +1093,20 @@ fn visible(renderer: &Renderer, y: i32, height: i32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{hit_test, service_layout, split_speed, HitTarget, Overlay, Page, PowerAction};
+    use super::{
+        hit_test, service_layout, split_speed, HitTarget, Overlay, Page, PowerAction, SERVICES_Y,
+    };
     use crate::metrics::SystemData;
 
     #[test]
-    fn two_page_swipes_wrap_in_both_directions() {
+    fn pages_wrap_in_both_directions() {
         assert_eq!(Page::Overview.shifted(1), Page::Services);
-        assert_eq!(Page::Overview.shifted(-1), Page::Services);
-        assert_eq!(Page::Services.shifted(1), Page::Overview);
+        assert_eq!(Page::Services.shifted(1), Page::Vms);
+        assert_eq!(Page::Vms.shifted(1), Page::Power);
+        assert_eq!(Page::Power.shifted(1), Page::Overview);
+        assert_eq!(Page::Overview.shifted(-1), Page::Power);
+        assert_eq!(Page::Services.shifted(-1), Page::Overview);
+        assert_eq!(Page::Power.shifted(0), Page::Power);
     }
 
     #[test]
@@ -1086,27 +1114,31 @@ mod tests {
         let data = SystemData::default();
         let overlay = Overlay::Confirm(PowerAction::Reboot);
         assert_eq!(
-            hit_test(&data, Page::Services, 0, overlay, 262, 540),
+            hit_test(&data, Page::Power, 0, overlay, 262, 540),
             Some(HitTarget::Confirm(PowerAction::Reboot))
         );
         assert_eq!(
-            hit_test(&data, Page::Services, 0, overlay, 114, 540),
+            hit_test(&data, Page::Power, 0, overlay, 114, 540),
             Some(HitTarget::Cancel)
         );
-        assert_eq!(hit_test(&data, Page::Services, 0, overlay, 188, 450), None);
+        assert_eq!(hit_test(&data, Page::Power, 0, overlay, 188, 450), None);
     }
 
     #[test]
     fn power_buttons_match_master_layout() {
         let data = SystemData::default();
-        let power_y = service_layout(&data).3;
+        let power_y = SERVICES_Y;
         assert_eq!(
-            hit_test(&data, Page::Services, 0, Overlay::None, 188, power_y + 90),
+            hit_test(&data, Page::Power, 0, Overlay::None, 188, power_y + 90),
             Some(HitTarget::Reboot)
         );
         assert_eq!(
-            hit_test(&data, Page::Services, 0, Overlay::None, 188, power_y + 210),
+            hit_test(&data, Page::Power, 0, Overlay::None, 188, power_y + 210),
             Some(HitTarget::Shutdown)
+        );
+        assert_eq!(
+            hit_test(&data, Page::Vms, 0, Overlay::None, 188, power_y + 90),
+            None
         );
     }
 

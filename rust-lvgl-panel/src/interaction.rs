@@ -23,7 +23,7 @@ pub(crate) fn average_render_ms(total: Duration, frames: u32) -> f64 {
 }
 
 pub(crate) fn apply_scroll(
-    scroll: &mut [i32; 2],
+    scroll: &mut [i32; 4],
     data: &metrics::SystemData,
     page: view::Page,
     viewport_height: u32,

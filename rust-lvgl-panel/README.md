@@ -30,6 +30,18 @@ src/
 
 `assets/emoji/` 中的 RGBA 图标通过 `include_bytes!` 编译进程序。`assets/emoji.ttf` 只用于 `tools/extract_emoji_bitmaps.py` 重新生成这些图标，不是运行时依赖。
 
+## 磁盘健康指标说明
+
+每块磁盘显示一行：型号、类型徽章、健康徽章、元信息和容量进度条。
+
+- **eMMC（系统盘）**：eMMC 没有通电时长计数器（EXT_CSD 不提供、smartctl 也不支持 MMC），因此**不显示使用时长和出厂日期**，显示：
+  - 已耗寿命：来自 EXT_CSD `life_time`（0x0=0~10%、0x1=10~20%、… 0x9=90~100%、0xA/0xB=超过额定寿命），显示两个估算值中较大的区间。
+  - 健康徽章：来自 `pre_eol_info`（0x01 正常 / 0x02 注意 / 0x03 告警），以它为准。
+  - 判断参考：已耗 <50% 属正常使用，50~80% 建议关注，>80% 建议备份数据并留意更换。
+- **NVMe/SSD**：smartctl 的 `Percentage Used`（损耗%）、`Power On Hours`（使用时长 h）、`Temperature`。
+- **HDD**：SMART 属性 `Power_On_Hours`（使用时长）、`Temperature_Celsius`（温度）、`Reallocated_Sector_Ct`（坏道数，0 为正常）；健康取 `SMART overall-health` 自检结果（正常/注意/告警）。
+- 容量进度条表示该盘已挂载分区的文件系统使用率，与健康无关。
+
 ## 构建与测试
 
 ```bash
