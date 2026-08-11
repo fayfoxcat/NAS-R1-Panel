@@ -1,6 +1,6 @@
 # HS-NAS-R1 Panel
 
-海康威视 NAS R1 的 `376×960 @ 56 Hz` 竖向触摸屏状态面板。**完全从零开发的 Rust 原生实现**：`master` 使用纯 Rust 软件渲染，直接驱动 DRM/KMS 显示和 evdev 触摸设备，无任何 GUI 框架依赖。
+海康威视 NAS R1 的 `376×960 @ 56 Hz` 竖向触摸屏状态面板。**Rust 原生实现**：`master` 使用纯 Rust 软件渲染，直接驱动 DRM/KMS 显示和 evdev 触摸设备
 
 ## 功能
 
@@ -28,7 +28,7 @@ curl -fsSL https://raw.githubusercontent.com/fayfoxcat/HS-NAS-R1-Panel/master/in
 每块磁盘显示一行：型号、类型徽章、健康徽章、元信息和容量进度条。
 
 - **eMMC（系统盘）**：eMMC 没有通电时长计数器（EXT_CSD 不提供、smartctl 也不支持 MMC），因此**不显示使用时长和出厂日期**，显示：
-  - 已耗寿命：来自 EXT_CSD `life_time`（0x0=0~10%、0x1=10~20%、… 0x9=90~100%、0xA/0xB=超过额定寿命），显示两个估算值中较大的区间。
+  - 已耗寿命：来自 EXT_CSD `life_time`（… 0x9=90~100%、0xA/0xB=超过额定寿命），显示两个估算值中较大的区间。
   - 健康徽章：来自 `pre_eol_info`（0x01 正常 / 0x02 注意 / 0x03 告警），以它为准。
   - 判断参考：已耗 <50% 属正常使用，50~80% 建议关注，>80% 建议备份数据并留意更换。
 - **NVMe/SSD**：smartctl 的 `Percentage Used`（损耗%）、`Power On Hours`（使用时长 h）、`Temperature`。
@@ -91,25 +91,5 @@ R1_PANEL_MODAL=reboot ./target/x86_64-unknown-linux-musl/release/r1-panel --scre
 - DRM 两个 dumb buffer 在退出时解除映射并销毁；链路维护线程共享停止标志。
 - 动态更新不重建页面，只有慢清单或布局变化才触发整页重绘。
 - 无触摸、动画和待更新数据时，主循环只进行轻量轮询。
-
-## 开发机到 NAS 的安全测试流程
-
-测试部署应使用带 SHA256 前 8 位的新文件名，不覆盖或删除旧版本。停止旧进程前必须重新核对进程命令行，再优先发送 `SIGTERM`：
-
-```text
-scp r1-panel-rust-<hash> <nas>:/opt/r1-panel/
-ssh <nas>
-cd /opt/r1-panel
-chmod 755 r1-panel-rust-<hash>
-ps -ef | grep '[r]1-panel'
-kill -TERM <已核实的旧 PID>
-nohup env RUST_LOG=info ./r1-panel-rust-<hash> >rust-<hash>.log 2>&1 &
-```
-
-当前开发约束见 [会话交接文档.md](会话交接文档.md)。
-
-## 分支说明
-
-- `master`：唯一主线，完全从零开发的 Rust 原生实现，后续开发均在此分支进行。
 
 MIT License
