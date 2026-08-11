@@ -581,11 +581,12 @@ fn parse_smart(out: &str, disk: &mut DiskHealth) {
                 disk.temperature = Some(t);
             }
         } else if low.contains("percentage used:") {
-            if let Some(val) = line.split(':').nth(1) {
-                let v = val.trim().trim_end_matches('%');
-                if let Ok(f) = v.parse::<f64>() {
-                    disk.percent_used = Some(f);
-                }
+            if let Some(f) = low
+                .split(':')
+                .nth(1)
+                .and_then(|v| v.trim().trim_end_matches('%').parse().ok())
+            {
+                disk.percent_used = Some(f);
             }
         } else if low.contains("power_on_hours") {
             // ATA attribute 9: "9 Power_On_Hours ... - 16402"
@@ -594,10 +595,12 @@ fn parse_smart(out: &str, disk: &mut DiskHealth) {
             }
         } else if low.starts_with("power on hours:") {
             // NVMe-style header line: "Power On Hours: 23,230"
-            if let Some(val) = line.split(':').nth(1) {
-                if let Ok(h) = val.trim().replace(',', "").parse::<f64>() {
-                    disk.power_on_hours = Some(h);
-                }
+            if let Some(h) = low
+                .split(':')
+                .nth(1)
+                .and_then(|v| v.trim().replace(',', "").parse().ok())
+            {
+                disk.power_on_hours = Some(h);
             }
         } else if low.contains("reallocated_sector") {
             // ATA attribute 5: "5 Reallocated_Sector_Ct ... - 0"
@@ -623,16 +626,9 @@ fn read_network() -> Vec<NetworkIface> {
     let elapsed = now.duration_since(previous.0).as_secs_f64();
 
     for (name, (rx, tx)) in &curr {
-        // Read IPs from /sys/class/net/<name>/ (simplified)
         let ips_v4 = read_iface_ips(name);
-
-        let is_up = std::path::Path::new(&format!("/sys/class/net/{}/operstate", name))
-            .exists()
-            .then(|| {
-                fs::read_to_string(format!("/sys/class/net/{}/operstate", name))
-                    .map(|s| s.trim() == "up")
-                    .unwrap_or(false)
-            })
+        let is_up = fs::read_to_string(format!("/sys/class/net/{}/operstate", name))
+            .map(|s| s.trim() == "up")
             .unwrap_or(false);
 
         let (rx_speed, tx_speed) = previous

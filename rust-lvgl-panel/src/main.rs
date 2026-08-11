@@ -75,7 +75,7 @@ fn main() {
     let mut gesture_render_total = std::time::Duration::ZERO;
     let mut gesture_render_max = std::time::Duration::ZERO;
     let mut swipe_anim: Option<interaction::SwipeAnimation> = None;
-    render.set_framebuffer(display.render_ptr());
+    render.set_framebuffer(display.fb_ptr());
     view::draw(&render, &data, page, scroll[page.index()], overlay);
     display.present();
     display.poll_flip_events();
@@ -107,7 +107,7 @@ fn main() {
                         page = page.shifted(anim.page_delta);
                         log::debug!("Page changed to {:?}", page);
                     }
-                    render.set_framebuffer(display.render_ptr());
+                    render.set_framebuffer(display.fb_ptr());
                     view::draw(&render, &data, page, scroll[page.index()], overlay);
                     display.present();
                     display.poll_flip_events();
@@ -147,7 +147,7 @@ fn main() {
                         });
                     } else {
                         let render_started = std::time::Instant::now();
-                        render.set_framebuffer(display.render_ptr());
+                        render.set_framebuffer(display.fb_ptr());
                         view::draw_swipe(&render, &data, page, scroll, swipe_x);
                         display.present();
                         display.poll_flip_events();
@@ -180,7 +180,7 @@ fn main() {
                         update.scroll_y,
                     ) {
                         let render_started = std::time::Instant::now();
-                        render.set_framebuffer(display.render_ptr());
+                        render.set_framebuffer(display.fb_ptr());
                         view::draw(&render, &data, page, scroll[page.index()], overlay);
                         display.present();
                         display.poll_flip_events();
@@ -220,6 +220,7 @@ fn main() {
                 inertia_active = false;
                 scroll_velocity = 0.0;
                 scroll_fraction = 0.0;
+                let mut power_action = None;
                 if let Some(target) =
                     view::hit_test(&data, page, scroll[page.index()], overlay, x, y)
                 {
@@ -233,14 +234,10 @@ fn main() {
                         view::HitTarget::Cancel => overlay = view::Overlay::None,
                         view::HitTarget::Confirm(action) => {
                             overlay = view::Overlay::Executing(action);
-                            render.set_framebuffer(display.render_ptr());
-                            view::draw(&render, &data, page, scroll[page.index()], overlay);
-                            display.present();
-                            display.poll_flip_events();
-                            execute_power(action);
+                            power_action = Some(action);
                         }
                     }
-                    render.set_framebuffer(display.render_ptr());
+                    render.set_framebuffer(display.fb_ptr());
                     view::draw(&render, &data, page, scroll[page.index()], overlay);
                     // The last scroll frame may still be flipping; wait briefly
                     // so the overlay frame is queued now. A dropped frame while
@@ -253,6 +250,9 @@ fn main() {
                         std::thread::sleep(std::time::Duration::from_millis(2));
                     }
                     display.poll_flip_events();
+                    if let Some(action) = power_action {
+                        execute_power(action);
+                    }
                 }
             }
         }
@@ -266,7 +266,7 @@ fn main() {
                 let eased = interaction::master_swipe_easing(progress);
                 let x = anim.start_x as f64 + (anim.end_x - anim.start_x) as f64 * eased;
                 let render_started = std::time::Instant::now();
-                render.set_framebuffer(display.render_ptr());
+                render.set_framebuffer(display.fb_ptr());
                 view::draw_swipe(&render, &data, page, scroll, x.round() as i32);
                 display.present();
                 display.poll_flip_events();
@@ -289,7 +289,7 @@ fn main() {
                         page = page.shifted(anim.page_delta);
                         log::debug!("Page changed to {:?}", page);
                     }
-                    render.set_framebuffer(display.render_ptr());
+                    render.set_framebuffer(display.fb_ptr());
                     view::draw(&render, &data, page, scroll[page.index()], overlay);
                     display.present();
                     display.poll_flip_events();
@@ -305,7 +305,7 @@ fn main() {
             scroll_fraction = distance - delta as f64;
             if delta != 0 {
                 if interaction::apply_scroll(&mut scroll, &data, page, display.height(), delta) {
-                    render.set_framebuffer(display.render_ptr());
+                    render.set_framebuffer(display.fb_ptr());
                     view::draw(&render, &data, page, scroll[page.index()], overlay);
                     display.present();
                     display.poll_flip_events();
@@ -343,7 +343,7 @@ fn main() {
             dynamic_redraw_pending = false;
         }
         if !touch_active && !inertia_active && swipe_anim.is_none() {
-            render.set_framebuffer(display.render_ptr());
+            render.set_framebuffer(display.fb_ptr());
             if full_redraw_pending {
                 // Full redraws re-paint the overlay, so they keep running while
                 // a modal is open; they also re-queue a frame whose page flip

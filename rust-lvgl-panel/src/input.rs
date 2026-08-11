@@ -63,7 +63,6 @@ pub struct TouchUpdate {
     pub swipe_x: Option<i32>,
     pub swipe_finished: bool,
     pub tap: Option<(i32, i32)>,
-    pub touched: bool,
     pub touch_started: bool,
     pub touching: bool,
 }
@@ -141,7 +140,6 @@ impl TouchInput {
                                 self.last_report_y = self.last_y;
                                 self.gesture_axis = 0;
                                 self.needs_origin = true;
-                                update.touched = true;
                                 update.touch_started = true;
                             }
                             InputEvent::TouchUp => {
@@ -159,7 +157,6 @@ impl TouchInput {
                                     self.start_y = self.last_y;
                                     self.last_report_y = self.last_y;
                                     self.needs_origin = false;
-                                    update.touched = true;
                                     continue;
                                 }
                                 let total_x = self.scale_x(self.last_x - self.start_x);
@@ -191,7 +188,6 @@ impl TouchInput {
                                     }
                                 }
                                 self.last_report_y = self.last_y;
-                                update.touched = true;
                             }
                             InputEvent::TouchMove => {}
                         }
@@ -248,7 +244,6 @@ impl TouchInput {
         self.touching = false;
         self.gesture_axis = 0;
         self.needs_origin = false;
-        update.touched = true;
     }
 
     fn scale_x(&self, value: i32) -> i32 {

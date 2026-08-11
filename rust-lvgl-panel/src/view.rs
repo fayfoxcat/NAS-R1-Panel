@@ -108,49 +108,41 @@ pub fn draw(renderer: &Renderer, data: &SystemData, page: Page, scroll_y: i32, o
 pub fn draw_dynamic(renderer: &Renderer, data: &SystemData, page: Page, scroll_y: i32) {
     renderer.set_origin_x(0);
     let offset = -scroll_y.clamp(0, max_scroll(data, page, renderer.height()));
-    match page {
-        Page::Overview => {
-            if visible(renderer, HEADER_Y + offset, 62) {
-                clear_region(renderer, 0, HEADER_Y + offset, renderer.width() as i32, 62);
-                draw_header(renderer, data, page, offset);
-            }
-            if visible(renderer, GAUGES_Y + offset, GAUGE_HEIGHT) {
-                draw_gauge(
-                    renderer,
-                    PAGE_PADDING_X,
-                    GAUGES_Y + offset,
-                    data.cpu.percent,
-                    "CPU",
-                    &format!(
-                        "{}℃ · {:.1}G",
-                        data.cpu.temperature_c.unwrap_or(0.0).round(),
-                        data.cpu.freq_mhz.unwrap_or(0.0) / 1000.0
-                    ),
-                    BLUE,
-                );
-                draw_gauge(
-                    renderer,
-                    194,
-                    GAUGES_Y + offset,
-                    data.memory.percent,
-                    "内存",
-                    &format!("{:.1}G / {:.1}G", data.memory.used_gb, data.memory.total_gb),
-                    PURPLE,
-                );
-            }
-            if visible(renderer, NETWORK_Y + offset, NETWORK_HEIGHT) {
-                draw_network(renderer, data, NETWORK_Y + offset);
-            }
-            let storage_y = STORAGE_Y + offset;
-            if visible(renderer, storage_y, storage_height(data)) {
-                draw_storage(renderer, data, storage_y);
-            }
+    if visible(renderer, HEADER_Y + offset, 62) {
+        clear_region(renderer, 0, HEADER_Y + offset, renderer.width() as i32, 62);
+        draw_header(renderer, data, page, offset);
+    }
+    if page == Page::Overview {
+        if visible(renderer, GAUGES_Y + offset, GAUGE_HEIGHT) {
+            draw_gauge(
+                renderer,
+                PAGE_PADDING_X,
+                GAUGES_Y + offset,
+                data.cpu.percent,
+                "CPU",
+                &format!(
+                    "{}℃ · {:.1}G",
+                    data.cpu.temperature_c.unwrap_or(0.0).round(),
+                    data.cpu.freq_mhz.unwrap_or(0.0) / 1000.0
+                ),
+                BLUE,
+            );
+            draw_gauge(
+                renderer,
+                194,
+                GAUGES_Y + offset,
+                data.memory.percent,
+                "内存",
+                &format!("{:.1}G / {:.1}G", data.memory.used_gb, data.memory.total_gb),
+                PURPLE,
+            );
         }
-        Page::Services | Page::Vms | Page::Power => {
-            if visible(renderer, HEADER_Y + offset, 62) {
-                clear_region(renderer, 0, HEADER_Y + offset, renderer.width() as i32, 62);
-                draw_header(renderer, data, page, offset);
-            }
+        if visible(renderer, NETWORK_Y + offset, NETWORK_HEIGHT) {
+            draw_network(renderer, data, NETWORK_Y + offset);
+        }
+        let storage_y = STORAGE_Y + offset;
+        if visible(renderer, storage_y, storage_height(data)) {
+            draw_storage(renderer, data, storage_y);
         }
     }
     renderer.present();

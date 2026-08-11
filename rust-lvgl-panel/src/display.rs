@@ -304,12 +304,9 @@ impl DrmDisplay {
     pub fn stride(&self) -> u32 {
         self.stride
     }
-    /// Pointer to the back buffer; the renderer draws into this one.
+    /// Pointer to the current back (off-screen) buffer; the renderer draws
+    /// into this one and it is swapped to the front on each page flip.
     pub fn fb_ptr(&self) -> *mut u8 {
-        self.back_ptr
-    }
-    /// Pointer to the current back (off-screen) buffer for the renderer.
-    pub fn render_ptr(&self) -> *mut u8 {
         self.back_ptr
     }
     pub fn connector_name(&self) -> &str {
