@@ -1085,9 +1085,7 @@ fn visible(renderer: &Renderer, y: i32, height: i32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        hit_test, service_layout, split_speed, HitTarget, Overlay, Page, PowerAction, SERVICES_Y,
-    };
+    use super::{hit_test, split_speed, HitTarget, Overlay, Page, PowerAction, SERVICES_Y};
     use crate::metrics::SystemData;
 
     #[test]
