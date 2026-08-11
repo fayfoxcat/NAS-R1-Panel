@@ -47,5 +47,5 @@ jobs:
             HS-NAS-R1 Panel ${{ github.ref_name }}
 
             ```bash
-            curl -fsSL https://raw.githubusercontent.com/fayfoxcat/HS-NAS-R1-Panel/master/install.sh | sudo bash
+            curl -fsSL https://raw.githubusercontent.com/fayfoxcat/NAS-R1-Panel/master/install.sh | sudo bash
             ```

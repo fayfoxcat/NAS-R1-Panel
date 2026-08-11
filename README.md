@@ -18,7 +18,7 @@
 发布包是静态链接的 Linux x86_64 二进制。安装脚本会下载并校验最新版本，然后创建 `r1-panel.service`：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/fayfoxcat/HS-NAS-R1-Panel/master/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/fayfoxcat/NAS-R1-Panel/master/install.sh | sudo bash
 ```
 
 运行时可选使用系统已有的 `smartctl`、`docker`、`virsh` 和 `systemctl` 获取附加状态；缺少某个命令不会影响面板启动。

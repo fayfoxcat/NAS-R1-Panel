@@ -6,3 +6,4 @@
 *.exe
 /target/
 .idea/
+/会话交接文档.md

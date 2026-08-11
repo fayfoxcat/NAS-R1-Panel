@@ -1,10 +1,10 @@
 #!/bin/bash
 # HS-NAS-R1 Panel — install the latest native Rust release.
-# Usage: curl -fsSL https://raw.githubusercontent.com/fayfoxcat/HS-NAS-R1-Panel/master/install.sh | sudo bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/fayfoxcat/NAS-R1-Panel/master/install.sh | sudo bash
 
 set -euo pipefail
 
-REPO="https://github.com/fayfoxcat/HS-NAS-R1-Panel"
+REPO="https://github.com/fayfoxcat/NAS-R1-Panel"
 INSTALL_DIR="/opt/r1-panel"
 BIN="${INSTALL_DIR}/r1-panel"
 SERVICE="/etc/systemd/system/r1-panel.service"
